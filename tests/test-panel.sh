@@ -31,3 +31,13 @@ t_power_actions_share_a_row() {
   assert_contains "$power_row" 'text: "Stop & disarm"'
   assert_contains "$power_row" 'text: "Stop & forget password"'
 }
+
+t_bar_icon_is_smaller_and_shifted_right() {
+  setup_env
+  local mark_size horizontal_offset
+  mark_size="$(grep -F 'readonly property real markSize:' "$ROOT_DIR/BarWidget.qml" || true)"
+  horizontal_offset="$(grep -F 'anchors.horizontalCenterOffset:' "$ROOT_DIR/BarWidget.qml" || true)"
+
+  assert_contains "$mark_size" '* 0.56'
+  assert_contains "$horizontal_offset" 'Style.space(2)'
+}

@@ -17,7 +17,7 @@ BarWidget {
   moduleName: "io.github.yudopr11.omarchy-remote-desktop-server"
 
   readonly property bool opened: loader.item ? loader.item.opened === true : false
-  readonly property real markSize: Math.max(12, Math.round(Style.bar.iconSlot * 0.62))
+  readonly property real markSize: Math.max(12, Math.round(Style.bar.iconSlot * 0.56))
   readonly property color markColor: root.bar ? root.bar.barForeground : Color.foreground
   readonly property real openPanelIndicatorWidth: markSize
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
@@ -53,6 +53,7 @@ BarWidget {
   Item {
     id: mark
     anchors.centerIn: parent
+    anchors.horizontalCenterOffset: Style.space(2)
     width: root.markSize
     height: root.markSize
 
