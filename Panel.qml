@@ -477,7 +477,8 @@ Panel {
           spacing: Style.space(8)
 
           Button {
-            width: (parent.width - parent.spacing) / 2
+            visible: !root.active
+            width: parent.width
             text: root.armed ? "Start" : "Start (set password)"
             bordered: true
             enabled: !root.busy && (root.installed || root.haveStatus)
@@ -487,7 +488,8 @@ Panel {
           }
 
           Button {
-            width: (parent.width - parent.spacing) / 2
+            visible: root.active
+            width: parent.width
             text: "Stop & disarm"
             bordered: true
             enabled: !root.busy
