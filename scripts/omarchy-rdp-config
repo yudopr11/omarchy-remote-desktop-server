@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+#
+# omarchy-rdp-config — the only writer of the hypr-rdp runtime config.
+#
+# Reads `options` as text (never sourced), so a comment or an unknown line the
+# user added survives every write. Commands print JSON on stdout; contract:
+# spec §8.
+#
+#   get
+#   set bind --mode localhost|lan|custom [--host H] [--port P]
+#   set username --value U
+#   set output --value NAME|virtual
+#   set opt --fps N | --bitrate BPS | --h264-backend auto|software|vaapi
+#           | --capture-mode wlr|ext|none
+#   set autostart --value on|off
+#   restart
+
+set -euo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
+OPTIONS_FILE="$CONF_DIR/options"
+PASSWORD_FILE="$CONF_DIR/password"
+UNIT="hypr-rdp.service"
+
+DEFAULT_BIND="127.0.0.1:3389"
+DEFAULT_FPS=30
+DEFAULT_BITRATE=8000000
+DEFAULT_H264_BACKEND="auto"
+DEFAULT_CAPTURE_MODE="wlr"
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: omarchy-rdp-config get
+       omarchy-rdp-config set bind --mode localhost|lan|custom [--host H] [--port P]
+       omarchy-rdp-config set username --value U
+       omarchy-rdp-config set output --value NAME|virtual
+       omarchy-rdp-config set opt --fps N | --bitrate BPS | --h264-backend auto|software|vaapi
+                             | --capture-mode wlr|ext|none
+       omarchy-rdp-config set autostart --value on|off
+       omarchy-rdp-config restart
+USAGE
+}
+
+# json_escape <string> — make a value safe to embed in a JSON string.
+json_escape() {
+  local s=${1//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '%s' "${s//$'\n'/ }"
+}
+
+json_bool() {
+  if [[ $1 == true ]]; then printf 'true'; else printf 'false'; fi
+}
+
+# --- reading the options file ------------------------------------------------
+
+bind="$DEFAULT_BIND"
+username="$(id -un)"
+output=""
+fps="$DEFAULT_FPS"
+bitrate="$DEFAULT_BITRATE"
+h264_backend="$DEFAULT_H264_BACKEND"
+capture_mode="$DEFAULT_CAPTURE_MODE"
+unknown_flags=()
+
+record_option() {
+  local flag="$1" value="${2:-}"
+  case "$flag" in
+    --fps)
+      if [[ $value =~ ^[0-9]+$ ]]; then fps="$value"; fi
+      ;;
+    --bitrate)
+      if [[ $value =~ ^[0-9]+$ ]]; then bitrate="$value"; fi
+      ;;
+    --h264-backend)
+      if [[ -n $value ]]; then h264_backend="$value"; fi
+      ;;
+    --capture-mode)
+      if [[ -n $value ]]; then capture_mode="$value"; fi
+      ;;
+    --output)
+      if [[ -n $value ]]; then output="$value"; fi
+      ;;
+    *)
+      unknown_flags+=("$flag")
+      if [[ -n $value ]]; then unknown_flags+=("$value"); fi
+      ;;
+  esac
+}
+
+# parse_option_tokens <text> — read `--flag value` pairs out of one line.
+parse_option_tokens() {
+  local text="$1"
+  set -f
+  local -a tokens=($text)
+  set +f
+  local i=0 token value
+  while (( i < ${#tokens[@]} )); do
+    token="${tokens[i]}"
+    if [[ $token == --* ]]; then
+      value=""
+      if (( i + 1 < ${#tokens[@]} )) && [[ ${tokens[i + 1]} != --* ]]; then
+        value="${tokens[i + 1]}"
+        i=$((i + 2))
+      else
+        i=$((i + 1))
+      fi
+      record_option "$token" "$value"
+    else
+      i=$((i + 1))
+    fi
+  done
+}
+
+# read_config — fill the variables above from $OPTIONS_FILE, if it exists.
+read_config() {
+  if [[ ! -f $OPTIONS_FILE ]]; then return 0; fi
+  local line rest in_options=false
+  while IFS= read -r line || [[ -n $line ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [[ $in_options == true ]]; then
+      if [[ $line == ')' || $line == ')'* ]]; then
+        in_options=false
+      elif [[ -n $line ]]; then
+        parse_option_tokens "$line"
+      fi
+      continue
+    fi
+    if [[ -z $line || $line == '#'* ]]; then continue; fi
+    if [[ $line == OPTIONS=\(* ]]; then
+      rest="${line#OPTIONS=(}"
+      if [[ $rest == *')' ]]; then
+        parse_option_tokens "${rest%%)}"
+      else
+        # multi-line block: keep reading until the closing paren
+        parse_option_tokens "$rest"
+        in_options=true
+      fi
+      continue
+    fi
+    if [[ $line =~ ^BIND=\"([^\"]*)\" ]]; then bind="${BASH_REMATCH[1]}"; continue; fi
+    if [[ $line =~ ^USERNAME=\"([^\"]*)\" ]]; then username="${BASH_REMATCH[1]}"; continue; fi
+  done < "$OPTIONS_FILE"
+}
+
+# --- enumeration -------------------------------------------------------------
+
+extract_string() {
+  local object="$1" key="$2"
+  if [[ $object =~ \"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
+
+extract_number() {
+  local object="$1" key="$2"
+  if [[ $object =~ \"$key\"[[:space:]]*:[[:space:]]*(-?[0-9]+) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
+
+# monitors_json — [{name,description,width,height,focused}] from hyprctl.
+# Parsed with bash regexes: the plugin's dependency ceiling has no jq.
+monitors_json() {
+  local json body
+  json="$(hyprctl monitors -j 2>/dev/null || true)"
+  if [[ -z $json || $json != *\[* || $json != *\]* ]]; then printf '[]'; return 0; fi
+  body="${json#*[}"
+  body="${body%]*}"
+
+  local pieces="" first=true object name description width height focused
+  while IFS= read -r object; do
+    name="$(extract_string "$object" name)"
+    if [[ -z $name ]]; then continue; fi
+    description="$(extract_string "$object" description)"
+    width="$(extract_number "$object" width)"
+    height="$(extract_number "$object" height)"
+    focused=false
+    if [[ $object =~ \"focused\"[[:space:]]*:[[:space:]]*true ]]; then focused=true; fi
+    if [[ $first == false ]]; then pieces+=","; fi
+    pieces+="{\"name\":\"$(json_escape "$name")\",\"description\":\"$(json_escape "$description")\",\"width\":${width:-0},\"height\":${height:-0},\"focused\":$(json_bool "$focused")}"
+    first=false
+  done < <(printf '%s\n' "$body" | sed 's/},{/}\n{/g')
+
+  printf '[%s]' "$pieces"
+}
+
+# addresses_json — non-loopback IPv4 addresses from `ip -4 -o addr show`.
+addresses_json() {
+  local line family address candidate pieces="" first=true
+  while IFS= read -r line; do
+    if read -r _ _ family address _ <<< "$line"; then
+      if [[ $family == inet && -n ${address:-} ]]; then
+        candidate="${address%%/*}"
+        if [[ $candidate != 127.* && -n $candidate ]]; then
+          if [[ $first == false ]]; then pieces+=","; fi
+          pieces+="\"$(json_escape "$candidate")\""
+          first=false
+        fi
+      fi
+    fi
+  done < <(ip -4 -o addr show 2>/dev/null || true)
+  printf '[%s]' "$pieces"
+}
+
+# --- commands ----------------------------------------------------------------
+
+cmd_get() {
+  read_config
+
+  local host="" port=0
+  if [[ $bind == *:* ]]; then
+    host="${bind%:*}"
+    port="${bind##*:}"
+    if [[ ! $port =~ ^[0-9]+$ ]]; then port=0; fi
+  else
+    host="$bind"
+  fi
+
+  local virtual=true
+  if [[ -n $output ]]; then virtual=false; fi
+
+  local autostart=false
+  local enabled_state
+  enabled_state="$(systemctl --user is-enabled "$UNIT" 2>/dev/null || true)"
+  if [[ $enabled_state == enabled ]]; then autostart=true; fi
+
+  local stored_password=false
+  if [[ -f $PASSWORD_FILE ]]; then stored_password=true; fi
+
+  local unknown_json="" first=true flag
+  for flag in ${unknown_flags[@]+"${unknown_flags[@]}"}; do
+    if [[ $first == false ]]; then unknown_json+=","; fi
+    unknown_json+="\"$(json_escape "$flag")\""
+    first=false
+  done
+
+  printf '{"bind":"%s","host":"%s","port":%s,"username":"%s","output":"%s","virtual":%s,"autostart":%s,"storedPassword":%s,"fps":%s,"bitrate":%s,"h264Backend":"%s","captureMode":"%s","unknownFlags":[%s],"monitors":%s,"addresses":%s}\n' \
+    "$(json_escape "$bind")" \
+    "$(json_escape "$host")" \
+    "$port" \
+    "$(json_escape "$username")" \
+    "$(json_escape "$output")" \
+    "$(json_bool "$virtual")" \
+    "$(json_bool "$autostart")" \
+    "$(json_bool "$stored_password")" \
+    "$fps" \
+    "$bitrate" \
+    "$(json_escape "$h264_backend")" \
+    "$(json_escape "$capture_mode")" \
+    "$unknown_json" \
+    "$(monitors_json)" \
+    "$(addresses_json)"
+}
+
+# --- entry point -------------------------------------------------------------
+
+command="${1:-}"
+shift || true
+
+case "$command" in
+  get) cmd_get ;;
+  "") usage; exit 1 ;;
+  *) usage; printf '{"error":"unknown command: %s"}\n' "$(json_escape "$command")"; exit 1 ;;
+esac
+
+exit 0
