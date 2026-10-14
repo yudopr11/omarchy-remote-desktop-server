@@ -163,11 +163,17 @@ extract_number() {
 # monitors_json — [{name,description,width,height,focused}] from hyprctl.
 # Parsed with bash regexes: the plugin's dependency ceiling has no jq.
 monitors_json() {
-  local json body
+  local json compact
   json="$(hyprctl monitors -j 2>/dev/null || true)"
   if [[ -z $json || $json != *\[* || $json != *\]* ]]; then printf '[]'; return 0; fi
-  body="${json#*[}"
-  body="${body%]*}"
+
+  # hyprctl pretty-prints this and nests objects that carry their own "name"
+  # (activeWorkspace, specialWorkspace), so flatten to a single line first and
+  # then cut at the top-level boundaries. A nested object is followed by
+  # `,"key"`, never by `{`, so `}, {` only matches between monitors.
+  compact="$(printf '%s' "$json" | tr -d '\n' | sed 's/[[:space:]]\{1,\}/ /g')"
+  compact="${compact#*[}"
+  compact="${compact%]*}"
 
   local pieces="" first=true object name description width height focused
   while IFS= read -r object; do
@@ -181,7 +187,7 @@ monitors_json() {
     if [[ $first == false ]]; then pieces+=","; fi
     pieces+="{\"name\":\"$(json_escape "$name")\",\"description\":\"$(json_escape "$description")\",\"width\":${width:-0},\"height\":${height:-0},\"focused\":$(json_bool "$focused")}"
     first=false
-  done < <(printf '%s\n' "$body" | sed 's/},{/}\n{/g')
+  done < <(printf '%s\n' "$compact" | sed 's/}, *{/}\n{/g')
 
   printf '[%s]' "$pieces"
 }

@@ -68,8 +68,45 @@ t_get_preserves_unknown() {
 
 t_get_monitors_and_addresses() {
   setup_env
+  # Real `hyprctl monitors -j` shape: pretty-printed, with nested objects whose
+  # own "name" keys must not be mistaken for the monitor's.
   cat > "$STUB_STATE/hyprctl.monitors" <<'JSON'
-[{"id":0,"name":"eDP-1","description":"BOE 0x08T2","make":"BOE","model":"0x08T2","width":1920,"height":1080,"focused":true},{"id":1,"name":"DP-3","description":"Dell Inc. DELL U2720Q","make":"Dell Inc.","model":"DELL U2720Q","width":3840,"height":2160,"focused":false}]
+[{
+    "id": 0,
+    "name": "eDP-1",
+    "description": "Samsung Display Corp. 0x4181",
+    "make": "Samsung Display Corp.",
+    "model": "0x4181",
+    "width": 2880,
+    "height": 1800,
+    "activeWorkspace": {
+        "id": 1,
+        "name": "1"
+    },
+    "specialWorkspace": {
+        "id": 0,
+        "name": ""
+    },
+    "reserved": [0, 26, 0, 0],
+    "scale": 1.25,
+    "focused": true,
+    "availableModes": ["2880x1800@90.00Hz","2880x1800@60.00Hz"]
+},
+{
+    "id": 1,
+    "name": "DP-3",
+    "description": "Dell Inc. DELL U2720Q",
+    "make": "Dell Inc.",
+    "model": "DELL U2720Q",
+    "width": 3840,
+    "height": 2160,
+    "activeWorkspace": {
+        "id": 2,
+        "name": "2"
+    },
+    "focused": false,
+    "availableModes": ["3840x2160@60.00Hz"]
+}]
 JSON
   cat > "$STUB_STATE/ip.addr" <<'IPADDR'
 1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
@@ -78,7 +115,7 @@ IPADDR
 
   local out
   out="$("$SCRIPTS/omarchy-rdp-config" get)" || fail "get exited non-zero"
-  assert_contains "$out" '"monitors":[{"name":"eDP-1","description":"BOE 0x08T2","width":1920,"height":1080,"focused":true},{"name":"DP-3","description":"Dell Inc. DELL U2720Q","width":3840,"height":2160,"focused":false}]'
+  assert_contains "$out" '"monitors":[{"name":"eDP-1","description":"Samsung Display Corp. 0x4181","width":2880,"height":1800,"focused":true},{"name":"DP-3","description":"Dell Inc. DELL U2720Q","width":3840,"height":2160,"focused":false}]'
   assert_contains "$out" '"addresses":["192.168.1.20"]'
 }
 
