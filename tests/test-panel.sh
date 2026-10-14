@@ -41,3 +41,15 @@ t_bar_icon_is_smaller_and_shifted_right() {
   assert_contains "$mark_size" '* 0.56'
   assert_contains "$horizontal_offset" 'Style.space(2)'
 }
+
+t_bar_icon_highlights_active_server() {
+  setup_env
+  local server_active mark_color active_probe
+  server_active="$(grep -F 'property bool serverActive:' "$ROOT_DIR/BarWidget.qml" || true)"
+  mark_color="$(grep -F 'readonly property color markColor:' "$ROOT_DIR/BarWidget.qml" || true)"
+  active_probe="$(grep -F 'command: ["systemctl", "--user", "is-active", "hypr-rdp.service"]' "$ROOT_DIR/BarWidget.qml" || true)"
+
+  assert_contains "$server_active" 'serverActive'
+  assert_contains "$mark_color" 'serverActive ? Color.accent'
+  assert_contains "$active_probe" 'hypr-rdp.service'
+}

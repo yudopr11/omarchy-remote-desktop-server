@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Effects
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -18,7 +19,8 @@ BarWidget {
 
   readonly property bool opened: loader.item ? loader.item.opened === true : false
   readonly property real markSize: Math.max(12, Math.round(Style.bar.iconSlot * 0.56))
-  readonly property color markColor: root.bar ? root.bar.barForeground : Color.foreground
+  property bool serverActive: false
+  readonly property color markColor: root.serverActive ? Color.accent : (root.bar ? root.bar.barForeground : Color.foreground)
   readonly property real openPanelIndicatorWidth: markSize
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
   readonly property bool popoutSwitchClosing: loader.item ? loader.item.popoutSwitchClosing === true : false
@@ -40,6 +42,22 @@ BarWidget {
   implicitHeight: button.implicitHeight
   onBarChanged: inject()
   onSettingsChanged: inject()
+
+  Process {
+    id: serverState
+    command: ["systemctl", "--user", "is-active", "hypr-rdp.service"]
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(code) { root.serverActive = code === 0 }
+  }
+
+  Timer {
+    interval: 3000
+    repeat: true
+    running: true
+    triggeredOnStart: true
+    onTriggered: if (!serverState.running) serverState.running = true
+  }
 
   Loader {
     id: loader
