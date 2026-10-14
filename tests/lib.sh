@@ -48,11 +48,20 @@ setup_env() {
   export PATH="$TEST_TMP/bin:$ORIGINAL_PATH"
 }
 
+# write_options <line>... — write a hypr-rdp options file into the case HOME.
+write_options() {
+  mkdir -p "$XDG_CONFIG_HOME/hypr-rdp"
+  printf '%s\n' "$@" > "$XDG_CONFIG_HOME/hypr-rdp/options"
+}
+
 # mask_stub <name> — make <name> behave as if it were not installed. A PATH
 # entry alone cannot hide a command that is also installed system-wide (the
 # real /usr/bin/hypr-rdp still answers), so the mask is an executable that
 # prints nothing and exits 127, which every caller must treat as "missing".
 mask_stub() {
+  # Drop the stub symlink first: writing through it would rewrite the source
+  # stub in tests/stubs and leak the mask into every later case.
+  rm -f "$TEST_TMP/bin/$1"
   cat > "$TEST_TMP/bin/$1" <<'MASK'
 #!/usr/bin/env bash
 printf '%s\n' "([masked])" >> "$STUB_LOG"

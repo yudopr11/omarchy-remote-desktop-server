@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # Contract tests for scripts/omarchy-rdp-status.
 
-# write_options <line>... — write a hypr-rdp options file into the case HOME.
-write_options() {
-  mkdir -p "$XDG_CONFIG_HOME/hypr-rdp"
-  printf '%s\n' "$@" > "$XDG_CONFIG_HOME/hypr-rdp/options"
-}
-
 t_status_unconfigured() {
   setup_env
   mask_stub hypr-rdp
