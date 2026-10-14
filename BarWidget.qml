@@ -46,7 +46,8 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "RDP"
+    // Remote Desktop Services mark: the "< >" chevron pair.
+    text: "❯❮"
     tooltipText: "Remote Desktop"
     fontSize: Style.font.body
     horizontalMargin: 5
