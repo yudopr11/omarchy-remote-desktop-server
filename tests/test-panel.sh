@@ -12,3 +12,22 @@ t_power_actions_follow_server_state() {
   assert_contains "$stop_block" 'visible: root.active'
   assert_contains "$forget_block" 'visible: root.storedPassword'
 }
+
+t_power_actions_share_a_row() {
+  setup_env
+  local power_row
+  power_row="$(awk '
+    /PanelSectionHeader \{ text: "POWER"/ { in_power = 1 }
+    in_power && /Row \{/ { in_row = 1; depth = 1; print; next }
+    in_row {
+      print
+      line = $0
+      depth += gsub(/\{/, "", line) - gsub(/\}/, "", line)
+      if (depth == 0) exit
+    }
+  ' "$ROOT_DIR/Panel.qml")"
+
+  assert_contains "$power_row" 'text: root.armed ? "Start"'
+  assert_contains "$power_row" 'text: "Stop & disarm"'
+  assert_contains "$power_row" 'text: "Stop & forget password"'
+}

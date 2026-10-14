@@ -478,7 +478,7 @@ Panel {
 
           Button {
             visible: !root.active
-            width: parent.width
+            width: root.storedPassword ? (parent.width - parent.spacing) / 2 : parent.width
             text: root.armed ? "Start" : "Start (set password)"
             bordered: true
             enabled: !root.busy && (root.installed || root.haveStatus)
@@ -489,13 +489,24 @@ Panel {
 
           Button {
             visible: root.active
-            width: parent.width
+            width: root.storedPassword ? (parent.width - parent.spacing) / 2 : parent.width
             text: "Stop & disarm"
             bordered: true
             enabled: !root.busy
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: root.stopDisarm()
+          }
+
+          Button {
+            visible: root.storedPassword
+            width: (parent.width - parent.spacing) / 2
+            text: "Stop & forget password"
+            bordered: true
+            enabled: !root.busy
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.stopForgetPassword()
           }
         }
 
@@ -507,16 +518,6 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
-        }
-
-        Button {
-          visible: root.storedPassword
-          text: "Stop & forget password"
-          bordered: true
-          enabled: !root.busy
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.stopForgetPassword()
         }
 
         PanelSeparator { foreground: root.foreground }
