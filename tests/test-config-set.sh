@@ -186,3 +186,152 @@ t_write_is_atomic_under_race() {
   assert_eq "1" "$(find "$XDG_CONFIG_HOME/hypr-rdp" -maxdepth 1 -name 'options.bak' | wc -l)"
   assert_eq "600" "$(stat -c '%a' "$(options_path)")"
 }
+
+# --- T6: set opt, set autostart, restart -------------------------------------
+
+t_opt_fps_and_bitrate_replaced_in_place() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"' 'OPTIONS=(' '  --fps 30' \
+    '  --bitrate 8000000' '  --output eDP-1' ')'
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set opt --fps 60 --bitrate 16000000)" \
+    || fail "set exited non-zero"
+  assert_contains "$out" '"fps":60'
+  assert_contains "$out" '"bitrate":16000000'
+  local content
+  content="$(cat "$(options_path)")"
+  assert_contains "$content" '--output eDP-1'
+  assert_eq "1" "$(count_lines '^  --fps 60$')"
+  assert_eq "1" "$(count_lines '^  --bitrate 16000000$')"
+  assert_eq "0" "$(count_lines '--fps 30')"
+}
+
+t_opt_backend_enum_replaced() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"' 'OPTIONS=(' '  --fps 30' \
+    '  --h264-backend auto' '  --h264-backend=auto' ')'
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set opt --h264-backend vaapi)" \
+    || fail "set exited non-zero"
+  assert_contains "$out" '"h264Backend":"vaapi"'
+  assert_eq "1" "$(count_lines '^  --h264-backend vaapi$')"
+  assert_eq "0" "$(count_lines 'auto')"
+}
+
+t_opt_capture_mode_none() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"' 'OPTIONS=(' '  --fps 30' ')'
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set opt --capture-mode ext)" \
+    || fail "set exited non-zero"
+  assert_contains "$out" '"captureMode":"ext"'
+  assert_eq "1" "$(count_lines '^  --capture-mode ext$')"
+
+  out="$("$SCRIPTS/omarchy-rdp-config" set opt --capture-mode none)" \
+    || fail "set exited non-zero"
+  assert_contains "$out" '"captureMode":""'
+  assert_eq "0" "$(count_lines 'capture-mode')"
+  assert_contains "$(cat "$(options_path)")" '--fps 30'
+}
+
+t_opt_rejects_out_of_range() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"' 'OPTIONS=(' '  --fps 30' ')'
+  local before after args out
+  for args in "--fps 0" "--fps 121" "--fps abc" "--bitrate 99999" \
+              "--bitrate 100000001" "--h264-backend nvenc" "--capture-mode portal"; do
+    before="$(options_sha)"
+    # shellcheck disable=SC2086
+    out="$("$SCRIPTS/omarchy-rdp-config" set opt $args 2>&1)"
+    assert_eq "1" "$?" "set opt $args"
+    assert_contains "$out" '"error"'
+    after="$(options_sha)"
+    assert_eq "$before" "$after" "set opt $args must not write"
+  done
+}
+
+t_autostart_on_copies_password_and_enables() {
+  setup_env
+  mkdir -p "$XDG_RUNTIME_DIR/hypr-rdp"
+  printf 'a-very-secret-password\n' > "$XDG_RUNTIME_DIR/hypr-rdp/password"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set autostart --value on)" || fail "set exited non-zero"
+  assert_contains "$out" '"autostart":true'
+  assert_contains "$out" '"storedPassword":true'
+  assert_eq "a-very-secret-password" "$(cat "$XDG_CONFIG_HOME/hypr-rdp/password")"
+  assert_eq "600" "$(stat -c '%a' "$XDG_CONFIG_HOME/hypr-rdp/password")"
+  assert_contains "$(cat "$STUB_LOG")" "systemctl --user enable hypr-rdp.service"
+}
+
+t_autostart_on_refuses_without_runtime_password() {
+  setup_env
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set autostart --value on 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" 'terminal'
+  assert_contains "$out" '"error"'
+  assert_not_contains "$(cat "$STUB_LOG")" "enable"
+  assert_file_absent "$XDG_CONFIG_HOME/hypr-rdp/password"
+}
+
+t_autostart_off_removes_copy_and_disables() {
+  setup_env
+  mkdir -p "$XDG_CONFIG_HOME/hypr-rdp"
+  printf 'old-secret\n' > "$XDG_CONFIG_HOME/hypr-rdp/password"
+  printf 'enabled' > "$STUB_STATE/systemctl.is-enabled"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set autostart --value off)" || fail "set exited non-zero"
+  assert_contains "$out" '"autostart":false'
+  assert_contains "$out" '"storedPassword":false'
+  assert_file_absent "$XDG_CONFIG_HOME/hypr-rdp/password"
+  assert_contains "$(cat "$STUB_LOG")" "systemctl --user disable hypr-rdp.service"
+}
+
+t_restart_waits_for_our_listener() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"'
+  printf '0' > "$STUB_STATE/systemctl.is-active"
+  printf 'LISTEN 0 4096 127.0.0.1:3389 0.0.0.0:* users:(("hypr-rdp",pid=1234,fd=7))\n' \
+    > "$STUB_STATE/ss.listen"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" restart)" || fail "restart exited non-zero"
+  assert_contains "$out" '"ready":true'
+  assert_contains "$out" '"restarted":true'
+  assert_contains "$(cat "$STUB_LOG")" "systemctl --user restart hypr-rdp.service"
+}
+
+t_restart_reports_failure_when_not_listening() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"'
+  printf '0' > "$STUB_STATE/systemctl.is-active"
+  printf 'hypr-rdp: bind failed\n' > "$STUB_STATE/journalctl.out"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" restart 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"ready":false'
+  assert_contains "$out" 'bind failed'
+  assert_contains "$(cat "$STUB_LOG")" "ss -ltnpH"
+  assert_contains "$(cat "$STUB_LOG")" "journalctl"
+}
+
+t_restart_foreign_listener_is_not_ready() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"'
+  printf '0' > "$STUB_STATE/systemctl.is-active"
+  printf 'LISTEN 0 4096 127.0.0.1:3389 0.0.0.0:* users:(("unrelated",pid=99,fd=3))\n' \
+    > "$STUB_STATE/ss.listen"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" restart 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"ready":false'
+}
+
+t_restart_inactive_is_a_noop() {
+  setup_env
+  printf '1' > "$STUB_STATE/systemctl.is-active"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" restart)" || fail "restart exited non-zero"
+  assert_contains "$out" '"restarted":false'
+  assert_contains "$out" '"ready":true'
+  assert_not_contains "$(cat "$STUB_LOG")" "restart"
+}

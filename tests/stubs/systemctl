@@ -4,6 +4,8 @@
 #   systemctl.is-enabled  stdout for is-enabled (absent -> exit 1)
 #   systemctl.cat         stdout for cat (absent -> exit 1)
 #   systemctl.out         stdout for any other subcommand (absent -> empty)
+# start/stop/enable/disable also move the state files, so a test can run a
+# sequence (set autostart on, then read status) without hand-writing it.
 printf '%s\n' "${0##*/} $*" >> "$STUB_LOG"
 
 args=()
@@ -30,6 +32,12 @@ case "$sub" in
     exit 1
     ;;
   *)
+    case "$sub" in
+      start) printf '0' > "$STUB_STATE/systemctl.is-active" ;;
+      stop) printf '1' > "$STUB_STATE/systemctl.is-active" ;;
+      enable) printf 'enabled' > "$STUB_STATE/systemctl.is-enabled" ;;
+      disable) printf 'disabled' > "$STUB_STATE/systemctl.is-enabled" ;;
+    esac
     if [[ -f $STUB_STATE/systemctl.out ]]; then cat "$STUB_STATE/systemctl.out"; fi
     exit 0
     ;;

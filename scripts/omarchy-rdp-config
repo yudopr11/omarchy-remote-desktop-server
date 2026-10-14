@@ -28,8 +28,6 @@ DEFAULT_BIND="127.0.0.1:3389"
 DEFAULT_PORT=3389
 DEFAULT_FPS=30
 DEFAULT_BITRATE=8000000
-DEFAULT_H264_BACKEND="auto"
-DEFAULT_CAPTURE_MODE="wlr"
 
 TMP_FILE=""
 cleanup() {
@@ -73,7 +71,11 @@ error_json() {
 
 bind="" username="" output=""
 fps="$DEFAULT_FPS" bitrate="$DEFAULT_BITRATE"
-h264_backend="$DEFAULT_H264_BACKEND" capture_mode="$DEFAULT_CAPTURE_MODE"
+
+# The numeric knobs report their effective default, because a number field needs
+# a number. The enum knobs report the raw value — empty when the flag is absent
+# — so the panel can show "Default" as something other than an explicit `wlr`.
+h264_backend="" capture_mode=""
 unknown_flags=()
 
 reset_config_state() {
@@ -82,8 +84,8 @@ reset_config_state() {
   output=""
   fps="$DEFAULT_FPS"
   bitrate="$DEFAULT_BITRATE"
-  h264_backend="$DEFAULT_H264_BACKEND"
-  capture_mode="$DEFAULT_CAPTURE_MODE"
+  h264_backend=""
+  capture_mode=""
   unknown_flags=()
 }
 
@@ -298,6 +300,34 @@ validate_output() {
   error_json "unknown display: $value"
 }
 
+validate_fps() {
+  local value="$1"
+  if [[ ! $value =~ ^[0-9]+$ ]] || (( value < 1 || value > 120 )); then
+    error_json "fps must be 1-120, got: $value"
+  fi
+}
+
+validate_bitrate() {
+  local value="$1"
+  if [[ ! $value =~ ^[0-9]+$ ]] || (( value < 100000 || value > 100000000 )); then
+    error_json "bitrate must be 100000-100000000, got: $value"
+  fi
+}
+
+validate_h264_backend() {
+  case "$1" in
+    auto|software|vaapi) return 0 ;;
+  esac
+  error_json "h264 backend must be auto, software or vaapi, got: $1"
+}
+
+validate_capture_mode() {
+  case "$1" in
+    wlr|ext|none) return 0 ;;
+  esac
+  error_json "capture mode must be wlr, ext or none, got: $1"
+}
+
 # --- writing the options file ------------------------------------------------
 
 # filter_key <KEY> <value> — replace the KEY="..." line, or append one at the
@@ -319,31 +349,32 @@ filter_key() {
   if [[ $wrote == false ]]; then printf '%s="%s"\n' "$key" "$value"; fi
 }
 
-# strip_output_tokens <text> — the same option text minus `--output` pairs.
-strip_output_tokens() {
-  local text="$1"
+# strip_flag_tokens <flag> <text> — the same option text minus `flag value` /
+# `flag=value` pairs.
+strip_flag_tokens() {
+  local flag="$1" text="$2"
   set -f
   local -a tokens=($text)
   set +f
   local out="" i=0 token
   while (( i < ${#tokens[@]} )); do
     token="${tokens[i]}"
-    if [[ $token == --output ]]; then
+    if [[ $token == "$flag" ]]; then
       i=$((i + 1))
       if (( i < ${#tokens[@]} )) && [[ ${tokens[i]} != --* ]]; then i=$((i + 1)); fi
       continue
     fi
-    if [[ $token == --output=* ]]; then i=$((i + 1)); continue; fi
+    if [[ $token == "$flag="* ]]; then i=$((i + 1)); continue; fi
     out+="$token "
     i=$((i + 1))
   done
   printf '%s' "${out% }"
 }
 
-# filter_output <value> — set `--output <value>` inside the OPTIONS block; an
-# empty value removes the flag (virtual display).
-filter_output() {
-  local value="$1" in_options=false saw_block=false wrote=false
+# filter_option <flag> [value] — set `flag value` inside the OPTIONS block; an
+# empty value removes the flag (that is how `--capture-mode none` works).
+filter_option() {
+  local flag="$1" value="${2:-}" in_options=false saw_block=false wrote=false
   local line rest inner
   if [[ -f $OPTIONS_FILE ]]; then
     while IFS= read -r line || [[ -n $line ]]; do
@@ -352,9 +383,9 @@ filter_output() {
           saw_block=true
           rest="${line#OPTIONS=(}"
           if [[ $rest == *')'* ]]; then
-            inner="$(strip_output_tokens "${rest%%)}")"
+            inner="$(strip_flag_tokens "$flag" "${rest%%)}")"
             if [[ -n $value ]]; then
-              if [[ -n $inner ]]; then inner="$inner --output $value"; else inner="--output $value"; fi
+              if [[ -n $inner ]]; then inner="$inner $flag $value"; else inner="$flag $value"; fi
             fi
             printf 'OPTIONS=(%s)\n' "$inner"
             wrote=true
@@ -369,16 +400,18 @@ filter_output() {
       fi
       if [[ $line == ')' || $line == ')'* ]]; then
         if [[ $wrote == false && -n $value ]]; then
-          printf '  --output %s\n' "$value"
+          printf '  %s %s\n' "$flag" "$value"
           wrote=true
         fi
         in_options=false
         printf '%s\n' "$line"
         continue
       fi
-      if [[ $line =~ ^[[:space:]]*--output[[:space:]]*$ || $line =~ ^[[:space:]]*--output([[:space:]]|=) ]]; then
-        if [[ -n $value ]]; then
-          printf '  --output %s\n' "$value"
+      if [[ $line =~ ^[[:space:]]*$flag[[:space:]]*$ || $line =~ ^[[:space:]]*$flag([[:space:]]|=) ]]; then
+        # Only the first occurrence is replaced; later ones are dropped, so a
+        # file that already carried the flag twice ends up with one copy.
+        if [[ -n $value && $wrote == false ]]; then
+          printf '  %s %s\n' "$flag" "$value"
           wrote=true
         fi
         continue
@@ -387,23 +420,25 @@ filter_output() {
     done < "$OPTIONS_FILE"
   fi
   if [[ $saw_block == false && -n $value ]]; then
-    printf 'OPTIONS=(\n  --output %s\n)\n' "$value"
+    printf 'OPTIONS=(\n  %s %s\n)\n' "$flag" "$value"
   fi
 }
 
-# rewrite_options <filter> [value] — stream the current file through a filter
-# into a fresh temp file and swap it in, keeping one backup.
+# rewrite_options <filter> [args...] — stream the current file through a filter
+# into a fresh temp file and swap it in, keeping one backup. Filters:
+#   rewrite_options bind|username <value>
+#   rewrite_options option <flag> [value]
 rewrite_options() {
-  local filter="$1" value="${2:-}"
+  local filter="$1"
+  shift || true
   mkdir -p "$CONF_DIR"
   local tmp
   tmp="$(mktemp "$CONF_DIR/.options.XXXXXX")"
   TMP_FILE="$tmp"
 
   case "$filter" in
-    bind|username) filter_key "${filter^^}" "$value" > "$tmp" ;;
-    output) filter_output "$value" > "$tmp" ;;
-    output-remove) filter_output "" > "$tmp" ;;
+    bind|username) filter_key "${filter^^}" "$1" > "$tmp" ;;
+    option) filter_option "$@" > "$tmp" ;;
     *) error_json "internal: unknown filter $filter" ;;
   esac
 
@@ -526,9 +561,9 @@ set_output() {
   done
   validate_output "$value"
   if [[ $value == virtual ]]; then
-    rewrite_options output-remove
+    rewrite_options option --output ""
   else
-    rewrite_options output "$value"
+    rewrite_options option --output "$value"
   fi
 }
 
@@ -539,10 +574,130 @@ cmd_set() {
     bind) set_bind "$@" ;;
     username) set_username "$@" ;;
     output) set_output "$@" ;;
-    "") error_json "set needs a field: bind|username|output" ;;
+    opt) set_opt "$@" ;;
+    autostart) set_autostart "$@" ;;
+    "") error_json "set needs a field: bind|username|output|opt|autostart" ;;
     *) error_json "unknown set field: $field" ;;
   esac
   cmd_get
+}
+
+# set_opt — tune the flags hypr-rdp reads at start. Every value is validated
+# before the first write, so a rejected flag cannot leave half a change behind.
+set_opt() {
+  local fps="" bitrate="" backend="" capture_mode=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --fps) if (( $# < 2 )); then error_json "--fps needs a value"; fi; fps="$2"; shift 2 ;;
+      --bitrate) if (( $# < 2 )); then error_json "--bitrate needs a value"; fi; bitrate="$2"; shift 2 ;;
+      --h264-backend) if (( $# < 2 )); then error_json "--h264-backend needs a value"; fi; backend="$2"; shift 2 ;;
+      --capture-mode) if (( $# < 2 )); then error_json "--capture-mode needs a value"; fi; capture_mode="$2"; shift 2 ;;
+      *) error_json "unknown option for set opt: $1" ;;
+    esac
+  done
+
+  if [[ -n $fps ]]; then validate_fps "$fps"; fi
+  if [[ -n $bitrate ]]; then validate_bitrate "$bitrate"; fi
+  if [[ -n $backend ]]; then validate_h264_backend "$backend"; fi
+  if [[ -n $capture_mode ]]; then validate_capture_mode "$capture_mode"; fi
+  if [[ -z $fps && -z $bitrate && -z $backend && -z $capture_mode ]]; then
+    error_json "set opt needs at least one of --fps|--bitrate|--h264-backend|--capture-mode"
+  fi
+
+  if [[ -n $fps ]]; then rewrite_options option --fps "$fps"; fi
+  if [[ -n $bitrate ]]; then rewrite_options option --bitrate "$bitrate"; fi
+  if [[ -n $backend ]]; then rewrite_options option --h264-backend "$backend"; fi
+  if [[ -n $capture_mode ]]; then
+    if [[ $capture_mode == none ]]; then
+      rewrite_options option --capture-mode ""
+    else
+      rewrite_options option --capture-mode "$capture_mode"
+    fi
+  fi
+}
+
+# set_autostart — `on` needs the password on disk because the unit starts at
+# login, before any terminal exists. It copies the runtime password; it never
+# asks for one here, because a password typed into a popup would end up in the
+# shell history and in this process's argv.
+set_autostart() {
+  local value=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --value) if (( $# < 2 )); then error_json "--value needs a value"; fi; value="$2"; shift 2 ;;
+      *) error_json "unknown option for set autostart: $1" ;;
+    esac
+  done
+
+  case "$value" in
+    on)
+      local runtime_password="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-rdp/password"
+      if [[ ! -s $runtime_password || ! -r $runtime_password ]]; then
+        error_json "no runtime password; set one in the terminal first"
+      fi
+      mkdir -p "$CONF_DIR"
+      install -m 0600 "$runtime_password" "$PASSWORD_FILE"
+      systemctl --user enable "$UNIT" >/dev/null 2>&1 || error_json "could not enable $UNIT"
+      ;;
+    off)
+      rm -f "$PASSWORD_FILE"
+      systemctl --user disable "$UNIT" >/dev/null 2>&1 || error_json "could not disable $UNIT"
+      ;;
+    "") error_json "set autostart needs --value on|off" ;;
+    *) error_json "autostart must be on or off, got: $value" ;;
+  esac
+}
+
+# listener_is_ours_or_unknown <port> — true when something listens on the port
+# and nothing says it belongs to somebody else. A listener with no owner shown
+# (ss cannot see another user's process) counts as ours: we cannot tell.
+listener_is_ours_or_unknown() {
+  local port="$1" out
+  out="$(ss -ltnpH "sport = :$port" 2>/dev/null || true)"
+  if [[ -z $out ]]; then return 1; fi
+  if [[ $out == *users:* && $out != *hypr-rdp* ]]; then return 1; fi
+  return 0
+}
+
+# cmd_restart — apply a config change and wait until the server is really up:
+# the unit is active again *and* the port is served by our process. A foreign
+# listener on the same port must not be mistaken for readiness.
+cmd_restart() {
+  if ! systemctl --user is-active "$UNIT" >/dev/null 2>&1; then
+    # Nothing is running, so there is nothing to restart and no listener to
+    # wait for; the panel reads the stopped state from `status`.
+    printf '{"restarted":false,"ready":true,"reason":"service is not running"}\n'
+    return 0
+  fi
+
+  systemctl --user restart "$UNIT" >/dev/null 2>&1 || true
+
+  read_config
+  local port=0
+  if [[ $bind == *:* ]]; then
+    port="${bind##*:}"
+    if [[ ! $port =~ ^[0-9]+$ ]]; then port=0; fi
+  fi
+
+  local try ready=false
+  for (( try = 0; try < 50; try++ )); do
+    if systemctl --user is-active "$UNIT" >/dev/null 2>&1 \
+       && (( port > 0 )) && listener_is_ours_or_unknown "$port"; then
+      ready=true
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ $ready == true ]]; then
+    printf '{"restarted":true,"ready":true}\n'
+    return 0
+  fi
+
+  local journal
+  journal="$(journalctl --user -u "$UNIT" -n 20 --no-pager 2>&1 || true)"
+  printf '{"restarted":true,"ready":false,"journal":"%s"}\n' "$(json_escape "$journal")"
+  exit 1
 }
 
 # --- entry point -------------------------------------------------------------
@@ -553,6 +708,7 @@ shift || true
 case "$command" in
   get) cmd_get ;;
   set) cmd_set "$@" ;;
+  restart) cmd_restart ;;
   "") usage; exit 1 ;;
   *) usage; printf '{"error":"unknown command: %s"}\n' "$(json_escape "$command")"; exit 1 ;;
 esac
