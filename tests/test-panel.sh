@@ -44,12 +44,14 @@ t_bar_icon_is_smaller_and_shifted_right() {
 
 t_bar_icon_highlights_active_server() {
   setup_env
-  local server_active mark_color active_probe
+  local server_active mark_color active_opacity active_probe
   server_active="$(grep -F 'property bool serverActive:' "$ROOT_DIR/BarWidget.qml" || true)"
   mark_color="$(grep -F 'readonly property color markColor:' "$ROOT_DIR/BarWidget.qml" || true)"
+  active_opacity="$(grep -F 'opacity: root.serverActive ? 1.0 : 0.45' "$ROOT_DIR/BarWidget.qml" || true)"
   active_probe="$(grep -F 'command: ["systemctl", "--user", "is-active", "hypr-rdp.service"]' "$ROOT_DIR/BarWidget.qml" || true)"
 
   assert_contains "$server_active" 'serverActive'
-  assert_contains "$mark_color" 'serverActive ? Color.bar.active'
+  assert_contains "$mark_color" 'root.bar ? root.bar.barForeground : Color.foreground'
+  assert_contains "$active_opacity" 'serverActive ? 1.0 : 0.45'
   assert_contains "$active_probe" 'hypr-rdp.service'
 }
