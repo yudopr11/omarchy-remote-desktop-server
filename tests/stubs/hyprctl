@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# hyprctl stub: `monitors` prints $STUB_STATE/hyprctl.monitors (absent -> []),
+# any other subcommand prints $STUB_STATE/hyprctl.out (absent -> nothing).
+printf '%s\n' "${0##*/} $*" >> "$STUB_LOG"
+if [[ ${1:-} == monitors ]]; then
+  if [[ -f $STUB_STATE/hyprctl.monitors ]]; then
+    cat "$STUB_STATE/hyprctl.monitors"
+  else
+    printf '[]\n'
+  fi
+  exit 0
+fi
+if [[ -f $STUB_STATE/hyprctl.out ]]; then cat "$STUB_STATE/hyprctl.out"; fi
+exit 0

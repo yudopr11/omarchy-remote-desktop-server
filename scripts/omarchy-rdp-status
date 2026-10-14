@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# omarchy-rdp-status — machine-readable state of the local hypr-rdp server.
+#
+# Prints exactly one JSON object and always exits 0, so the panel can render a
+# state chip even when nothing is installed. Field contract: spec §8.
+#
+# Reads only: it never writes config, never starts or stops anything.
+
+set -euo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/hypr-rdp"
+OPTIONS="$CONF_DIR/options"
+
+# json_escape <string> — make a value safe to embed in a JSON string.
+json_escape() {
+  local s=${1//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '%s' "${s//$'\n'/ }"
+}
+
+# --- probes ------------------------------------------------------------------
+
+configured=false
+if [[ -f $OPTIONS ]]; then
+  configured=true
+fi
+
+# installed is a run probe, not a `command -v` lookup: the panel's Install
+# affordance should key off a binary that actually reports a version, and a
+# lookup cannot be stubbed away in tests while the real binary exists.
+# version is that same probe's output (spec §8).
+
+installed=false
+version=""
+if out=$(hypr-rdp --version 2>/dev/null) && [[ -n $out ]]; then
+  installed=true
+  version="$out"
+fi
+
+# --- report ------------------------------------------------------------------
+
+printf '{"installed":%s,"configured":%s,"armed":%s,"active":%s,"serviceKnown":%s,"listening":%s,"bind":"%s","endpoint":"%s","host":"%s","port":%s,"username":"%s","output":"%s","virtual":%s,"autostart":%s,"storedPassword":%s,"version":"%s","runtimeInstalled":%s,"runtimeStale":%s}\n' \
+  "$installed" \
+  "$configured" \
+  false \
+  false \
+  false \
+  false \
+  "" \
+  "" \
+  "" \
+  0 \
+  "" \
+  "" \
+  false \
+  false \
+  false \
+  "$(json_escape "$version")" \
+  false \
+  false
+
+exit 0

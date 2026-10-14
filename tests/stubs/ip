@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# ip stub: prints $STUB_STATE/ip.addr, exit 1 when it is absent.
+printf '%s\n' "${0##*/} $*" >> "$STUB_LOG"
+if [[ -f $STUB_STATE/ip.addr ]]; then cat "$STUB_STATE/ip.addr"; exit 0; fi
+exit 1

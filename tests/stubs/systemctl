@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# systemctl stub (tests only). State files under $STUB_STATE:
+#   systemctl.is-active   exit code for is-active (absent -> 1)
+#   systemctl.is-enabled  stdout for is-enabled (absent -> exit 1)
+#   systemctl.cat         stdout for cat (absent -> exit 1)
+#   systemctl.out         stdout for any other subcommand (absent -> empty)
+printf '%s\n' "${0##*/} $*" >> "$STUB_LOG"
+
+args=()
+for arg in "$@"; do [[ $arg == "--user" ]] && continue; args+=("$arg"); done
+sub="${args[0]:-}"
+
+case "$sub" in
+  is-active)
+    if [[ -f $STUB_STATE/systemctl.is-active ]]; then
+      code="$(cat "$STUB_STATE/systemctl.is-active")"
+      exit "${code:-1}"
+    fi
+    exit 1
+    ;;
+  is-enabled)
+    if [[ -f $STUB_STATE/systemctl.is-enabled ]]; then
+      cat "$STUB_STATE/systemctl.is-enabled"
+      exit 0
+    fi
+    exit 1
+    ;;
+  cat)
+    if [[ -f $STUB_STATE/systemctl.cat ]]; then cat "$STUB_STATE/systemctl.cat"; exit 0; fi
+    exit 1
+    ;;
+  *)
+    if [[ -f $STUB_STATE/systemctl.out ]]; then cat "$STUB_STATE/systemctl.out"; fi
+    exit 0
+    ;;
+esac

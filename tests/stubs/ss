@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# ss stub: prints $STUB_STATE/ss.listen, exit 1 when it is absent.
+printf '%s\n' "${0##*/} $*" >> "$STUB_LOG"
+if [[ -f $STUB_STATE/ss.listen ]]; then cat "$STUB_STATE/ss.listen"; exit 0; fi
+exit 1
