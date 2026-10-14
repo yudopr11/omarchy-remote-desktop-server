@@ -50,6 +50,6 @@ t_bar_icon_highlights_active_server() {
   active_probe="$(grep -F 'command: ["systemctl", "--user", "is-active", "hypr-rdp.service"]' "$ROOT_DIR/BarWidget.qml" || true)"
 
   assert_contains "$server_active" 'serverActive'
-  assert_contains "$mark_color" 'serverActive ? Color.accent'
+  assert_contains "$mark_color" 'serverActive ? Color.bar.active'
   assert_contains "$active_probe" 'hypr-rdp.service'
 }

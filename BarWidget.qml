@@ -10,8 +10,9 @@ import qs.Ui
 // contract the bar's popout coordinator expects. Panel.qml gets the host
 // objects it needs through inject().
 //
-// The mark is assets/remote-desktop.svg, tinted to the bar's foreground colour.
-// A transparent WidgetButton sits on top so hover, tooltips and the bar's click
+// The mark is assets/remote-desktop.svg, using the bar foreground normally and
+// the theme's active color while the server is running. A transparent WidgetButton
+// sits on top so hover, tooltips and the bar's click
 // registration keep working.
 BarWidget {
   id: root
@@ -20,7 +21,7 @@ BarWidget {
   readonly property bool opened: loader.item ? loader.item.opened === true : false
   readonly property real markSize: Math.max(12, Math.round(Style.bar.iconSlot * 0.56))
   property bool serverActive: false
-  readonly property color markColor: root.serverActive ? Color.accent : (root.bar ? root.bar.barForeground : Color.foreground)
+  readonly property color markColor: root.serverActive ? Color.bar.active : (root.bar ? root.bar.barForeground : Color.foreground)
   readonly property real openPanelIndicatorWidth: markSize
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
   readonly property bool popoutSwitchClosing: loader.item ? loader.item.popoutSwitchClosing === true : false
