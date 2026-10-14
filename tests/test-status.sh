@@ -115,6 +115,18 @@ t_status_password_presence() {
   assert_contains "$out" '"storedPassword":true'
 }
 
+t_status_empty_password_files_are_not_armed() {
+  setup_env
+  mkdir -p "$XDG_RUNTIME_DIR/hypr-rdp" "$XDG_CONFIG_HOME/hypr-rdp"
+  : > "$XDG_RUNTIME_DIR/hypr-rdp/password"
+  : > "$XDG_CONFIG_HOME/hypr-rdp/password"
+
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-status")" || fail "status exited non-zero"
+  assert_contains "$out" '"armed":false'
+  assert_contains "$out" '"storedPassword":false'
+}
+
 t_status_installed_with_version() {
   setup_env
   printf 'hypr-rdp 0.1.6\n' > "$STUB_STATE/hypr-rdp.version"

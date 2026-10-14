@@ -35,8 +35,40 @@ t_uninstall_removes_managed() {
   assert_file_absent "$LEDGER/owner"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user stop hypr-rdp.service"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user disable hypr-rdp.service"
+  assert_eq "2" "$(grep -c 'systemctl --user daemon-reload' "$STUB_LOG")"
   assert_contains "$out" '"skipped":[]'
   assert_contains "$out" '"removed":["'
+}
+
+t_uninstall_aborts_when_stop_fails() {
+  case_setup
+  install_tree
+  printf '0' > "$STUB_STATE/systemctl.is-active"
+  printf '1' > "$STUB_STATE/systemctl.stop.exit"
+
+  local out rc
+  out="$(uninstall_run 2>&1)"
+  rc=$?
+  assert_eq "1" "$rc"
+  assert_contains "$out" 'could not stop'
+  [[ -f $UNIT_FILE ]] || fail "unit must remain when it could not be stopped"
+  [[ -f $BIN_DIR/omarchy-rdp-server ]] || fail "helpers must remain with a live unit"
+  assert_not_contains "$(cat "$STUB_LOG")" "systemctl --user disable"
+}
+
+t_uninstall_aborts_when_disable_fails() {
+  case_setup
+  install_tree
+  printf '3' > "$STUB_STATE/systemctl.is-active"
+  printf '1' > "$STUB_STATE/systemctl.disable.exit"
+
+  local out rc
+  out="$(uninstall_run 2>&1)"
+  rc=$?
+  assert_eq "1" "$rc"
+  assert_contains "$out" 'could not disable'
+  [[ -f $UNIT_FILE ]] || fail "unit must remain if it could not be disabled"
+  [[ -f $BIN_DIR/omarchy-rdp-server ]] || fail "helpers must remain with the unit"
 }
 
 t_uninstall_skips_modified_file() {
@@ -51,6 +83,22 @@ t_uninstall_skips_modified_file() {
   assert_contains "$out" "omarchy-rdp-stop"
   assert_file_absent "$BIN_DIR/omarchy-rdp-server"
   assert_file_absent "$UNIT_FILE"
+}
+
+t_uninstall_skips_modified_unit_and_preserves_helpers() {
+  case_setup
+  install_tree
+  printf '# locally modified unit\n' >> "$UNIT_FILE"
+
+  local out rc h
+  out="$(uninstall_run)"
+  rc=$?
+  assert_eq "3" "$rc"
+  [[ -f $UNIT_FILE ]] || fail "a modified unit must survive"
+  for h in "${HELPERS[@]}"; do
+    [[ -f $BIN_DIR/$h ]] || fail "a helper must survive while the unit remains"
+  done
+  assert_contains "$out" "$UNIT_FILE"
 }
 
 t_uninstall_skips_foreign_marker() {

@@ -74,17 +74,68 @@ remove_target() {
   removed+=("$target")
 }
 
-# Stop and disable before the unit file goes away, or systemd is left holding a
-# unit whose file it can no longer read.
-if [[ $foreign == false && -f $UNIT_DIR/$UNIT_NAME ]]; then
-  systemctl --user stop "$UNIT_NAME" || true
-  systemctl --user disable "$UNIT_NAME" || true
+print_result() {
+  printf '{"removed":%s,"skipped":%s}\n' \
+    "$(json_array "${removed[@]}")" "$(json_array "${skipped[@]}")"
+}
+
+# Never leave an unmanaged unit pointing at helpers we just removed. If the
+# unit is foreign or modified, keep its whole runtime intact and report it.
+unit_present=false
+if [[ -e $UNIT_DIR/$UNIT_NAME || -L $UNIT_DIR/$UNIT_NAME ]]; then
+  unit_present=true
+fi
+if [[ $unit_present == true ]] && ! is_managed_target "$UNIT_DIR/$UNIT_NAME"; then
+  skipped+=("$UNIT_DIR/$UNIT_NAME")
+  for helper in "${HELPERS[@]}"; do
+    target="$BIN_DIR/$helper"
+    if [[ -e $target || -L $target ]]; then skipped+=("$target"); fi
+  done
+  if [[ $remove_config == true ]]; then
+    for file in "${CONFIG_FILES[@]}"; do
+      target="$CONF_DIR/$file"
+      if [[ -e $target || -L $target ]]; then skipped+=("$target"); fi
+    done
+  fi
+  printf 'uninstall.sh: keeping runtime because %s is not managed by this plugin\n' "$UNIT_NAME" >&2
+  print_result
+  exit 3
+fi
+
+# Stop and disable before removing the unit. If either fails, nothing is removed.
+unit_to_remove=false
+if [[ $unit_present == true ]]; then
+  if ! systemctl --user stop "$UNIT_NAME"; then
+    printf 'uninstall.sh: could not stop %s; nothing was removed\n' "$UNIT_NAME" >&2
+    exit 1
+  fi
+  if ! systemctl --user disable "$UNIT_NAME"; then
+    printf 'uninstall.sh: could not disable %s; nothing was removed\n' "$UNIT_NAME" >&2
+    exit 1
+  fi
+  unit_to_remove=true
+fi
+
+remove_target "$UNIT_DIR/$UNIT_NAME"
+if [[ $unit_to_remove == true ]]; then
+  if [[ -e $UNIT_DIR/$UNIT_NAME || -L $UNIT_DIR/$UNIT_NAME ]]; then
+    # It changed after the preflight. Retain helpers rather than orphaning it.
+    for helper in "${HELPERS[@]}"; do
+      target="$BIN_DIR/$helper"
+      if [[ -e $target || -L $target ]]; then skipped+=("$target"); fi
+    done
+    print_result
+    exit 3
+  fi
+  if ! systemctl --user daemon-reload; then
+    printf 'uninstall.sh: could not reload the user systemd manager after removing %s; helpers were kept\n' "$UNIT_NAME" >&2
+    exit 1
+  fi
 fi
 
 for helper in "${HELPERS[@]}"; do
   remove_target "$BIN_DIR/$helper"
 done
-remove_target "$UNIT_DIR/$UNIT_NAME"
 
 if [[ $foreign == false && -f $(ownership_dir)/owner ]]; then
   rm -f "$(ownership_dir)/owner"
@@ -123,8 +174,7 @@ if [[ $remove_package == true ]]; then
   remove_package_now
 fi
 
-printf '{"removed":%s,"skipped":%s}\n' \
-  "$(json_array "${removed[@]}")" "$(json_array "${skipped[@]}")"
+print_result
 
 if (( ${#skipped[@]} > 0 )); then
   exit 3

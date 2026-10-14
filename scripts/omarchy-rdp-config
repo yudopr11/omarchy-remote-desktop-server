@@ -12,13 +12,14 @@
 #   set username --value U
 #   set output --value NAME|virtual
 #   set opt --fps N | --bitrate BPS | --h264-backend auto|software|vaapi
-#           | --capture-mode wlr|ext|none
+#           | --capture-mode wlr|ext|none | --audio-mode default|off|redirect|mirror
 #   set autostart --value on|off
 #   restart
 
 set -euo pipefail
 
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+CONF_DIR="$CONFIG_HOME/hypr-rdp"
 OPTIONS_FILE="$CONF_DIR/options"
 BACKUP_FILE="$CONF_DIR/options.bak"
 PASSWORD_FILE="$CONF_DIR/password"
@@ -42,7 +43,7 @@ usage: omarchy-rdp-config get
        omarchy-rdp-config set username --value U
        omarchy-rdp-config set output --value NAME|virtual
        omarchy-rdp-config set opt --fps N | --bitrate BPS | --h264-backend auto|software|vaapi
-                             | --capture-mode wlr|ext|none
+                             | --capture-mode wlr|ext|none | --audio-mode default|off|redirect|mirror
        omarchy-rdp-config set autostart --value on|off
        omarchy-rdp-config restart
        omarchy-rdp-config start
@@ -76,7 +77,7 @@ fps="$DEFAULT_FPS" bitrate="$DEFAULT_BITRATE"
 # The numeric knobs report their effective default, because a number field needs
 # a number. The enum knobs report the raw value — empty when the flag is absent
 # — so the panel can show "Default" as something other than an explicit `wlr`.
-h264_backend="" capture_mode=""
+h264_backend="" capture_mode="" audio_mode=""
 unknown_flags=()
 
 reset_config_state() {
@@ -87,6 +88,7 @@ reset_config_state() {
   bitrate="$DEFAULT_BITRATE"
   h264_backend=""
   capture_mode=""
+  audio_mode=""
   unknown_flags=()
 }
 
@@ -104,6 +106,9 @@ record_option() {
       ;;
     --capture-mode)
       if [[ -n $value ]]; then capture_mode="$value"; fi
+      ;;
+    --audio-mode)
+      if [[ -n $value ]]; then audio_mode="$value"; fi
       ;;
     --output)
       if [[ -n $value ]]; then output="$value"; fi
@@ -329,6 +334,13 @@ validate_capture_mode() {
   error_json "capture mode must be wlr, ext or none, got: $1"
 }
 
+validate_audio_mode() {
+  case "$1" in
+    default|off|redirect|mirror) return 0 ;;
+  esac
+  error_json "audio mode must be default, off, redirect or mirror, got: $1"
+}
+
 # --- writing the options file ------------------------------------------------
 
 # filter_key <KEY> <value> — replace the KEY="..." line, or append one at the
@@ -486,7 +498,7 @@ cmd_get() {
   if [[ $enabled_state == enabled ]]; then autostart=true; fi
 
   local stored_password=false
-  if [[ -f $PASSWORD_FILE ]]; then stored_password=true; fi
+  if [[ -s $PASSWORD_FILE ]]; then stored_password=true; fi
 
   local unknown_json="" first=true flag
   for flag in ${unknown_flags[@]+"${unknown_flags[@]}"}; do
@@ -495,7 +507,7 @@ cmd_get() {
     first=false
   done
 
-  printf '{"bind":"%s","host":"%s","port":%s,"username":"%s","output":"%s","virtual":%s,"autostart":%s,"storedPassword":%s,"fps":%s,"bitrate":%s,"h264Backend":"%s","captureMode":"%s","unknownFlags":[%s],"monitors":%s,"addresses":%s}\n' \
+  printf '{"bind":"%s","host":"%s","port":%s,"username":"%s","output":"%s","virtual":%s,"autostart":%s,"storedPassword":%s,"fps":%s,"bitrate":%s,"h264Backend":"%s","captureMode":"%s","audioMode":"%s","unknownFlags":[%s],"monitors":%s,"addresses":%s}\n' \
     "$(json_escape "$bind")" \
     "$(json_escape "$host")" \
     "$port" \
@@ -508,6 +520,7 @@ cmd_get() {
     "$bitrate" \
     "$(json_escape "$h264_backend")" \
     "$(json_escape "$capture_mode")" \
+    "$(json_escape "$audio_mode")" \
     "$unknown_json" \
     "$(monitors_json)" \
     "$(addresses_json)"
@@ -601,13 +614,14 @@ cmd_set() {
 # set_opt — tune the flags hypr-rdp reads at start. Every value is validated
 # before the first write, so a rejected flag cannot leave half a change behind.
 set_opt() {
-  local fps="" bitrate="" backend="" capture_mode=""
+  local fps="" bitrate="" backend="" capture_mode="" audio_mode=""
   while (( $# > 0 )); do
     case "$1" in
       --fps) if (( $# < 2 )); then error_json "--fps needs a value"; fi; fps="$2"; shift 2 ;;
       --bitrate) if (( $# < 2 )); then error_json "--bitrate needs a value"; fi; bitrate="$2"; shift 2 ;;
       --h264-backend) if (( $# < 2 )); then error_json "--h264-backend needs a value"; fi; backend="$2"; shift 2 ;;
       --capture-mode) if (( $# < 2 )); then error_json "--capture-mode needs a value"; fi; capture_mode="$2"; shift 2 ;;
+      --audio-mode) if (( $# < 2 )); then error_json "--audio-mode needs a value"; fi; audio_mode="$2"; shift 2 ;;
       *) error_json "unknown option for set opt: $1" ;;
     esac
   done
@@ -616,8 +630,9 @@ set_opt() {
   if [[ -n $bitrate ]]; then validate_bitrate "$bitrate"; fi
   if [[ -n $backend ]]; then validate_h264_backend "$backend"; fi
   if [[ -n $capture_mode ]]; then validate_capture_mode "$capture_mode"; fi
-  if [[ -z $fps && -z $bitrate && -z $backend && -z $capture_mode ]]; then
-    error_json "set opt needs at least one of --fps|--bitrate|--h264-backend|--capture-mode"
+  if [[ -n $audio_mode ]]; then validate_audio_mode "$audio_mode"; fi
+  if [[ -z $fps && -z $bitrate && -z $backend && -z $capture_mode && -z $audio_mode ]]; then
+    error_json "set opt needs at least one of --fps|--bitrate|--h264-backend|--capture-mode|--audio-mode"
   fi
 
   lock_options
@@ -631,6 +646,24 @@ set_opt() {
     else
       rewrite_options option --capture-mode "$capture_mode"
     fi
+  fi
+  if [[ -n $audio_mode ]]; then
+    if [[ $audio_mode == default ]]; then
+      rewrite_options option --audio-mode ""
+    else
+      rewrite_options option --audio-mode "$audio_mode"
+    fi
+  fi
+}
+
+# Keep systemd's unit specifiers (%E) and the helper process pointed at the
+# same XDG config directory as the panel/CLI that issued the action.
+sync_systemd_config_home() {
+  if ! systemctl --user set-environment "XDG_CONFIG_HOME=$CONFIG_HOME" >/dev/null 2>&1; then
+    error_json "could not set XDG_CONFIG_HOME in the user systemd manager"
+  fi
+  if ! systemctl --user daemon-reload >/dev/null 2>&1; then
+    error_json "could not reload the user systemd manager"
   fi
 }
 
@@ -653,14 +686,25 @@ set_autostart() {
       if [[ ! -s $runtime_password || ! -r $runtime_password ]]; then
         error_json "no runtime password; set one in the terminal first"
       fi
+      sync_systemd_config_home
       mkdir -p "$CONF_DIR"
       lock_options
-      install -m 0600 "$runtime_password" "$PASSWORD_FILE"
-      systemctl --user enable "$UNIT" >/dev/null 2>&1 || error_json "could not enable $UNIT"
+      local password_tmp
+      password_tmp="$(mktemp "$CONF_DIR/.password.XXXXXX")"
+      install -m 0600 "$runtime_password" "$password_tmp"
+      if ! systemctl --user enable "$UNIT" >/dev/null 2>&1; then
+        rm -f "$password_tmp"
+        error_json "could not enable $UNIT"
+      fi
+      if ! mv -f "$password_tmp" "$PASSWORD_FILE"; then
+        systemctl --user disable "$UNIT" >/dev/null 2>&1 || true
+        rm -f "$password_tmp"
+        error_json "could not store the autostart password"
+      fi
       ;;
     off)
-      rm -f "$PASSWORD_FILE"
       systemctl --user disable "$UNIT" >/dev/null 2>&1 || error_json "could not disable $UNIT"
+      rm -f "$PASSWORD_FILE"
       ;;
     "") error_json "set autostart needs --value on|off" ;;
     *) error_json "autostart must be on or off, got: $value" ;;
@@ -716,6 +760,7 @@ cmd_restart() {
     return 0
   fi
 
+  sync_systemd_config_home
   systemctl --user restart "$UNIT" >/dev/null 2>&1 || true
 
   if wait_for_ready; then
@@ -729,6 +774,7 @@ cmd_restart() {
 
 # cmd_start — the panel's power switch: bring the unit up and wait for readiness.
 cmd_start() {
+  sync_systemd_config_home
   systemctl --user start "$UNIT" >/dev/null 2>&1 || true
 
   if wait_for_ready; then

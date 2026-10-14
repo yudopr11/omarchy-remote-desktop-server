@@ -29,6 +29,14 @@ t_server_argv_exact() {
     "$(argv)"
 }
 
+t_server_passes_audio_mode() {
+  setup_env
+  configure_all
+  write_options 'BIND="127.0.0.1:3389"' 'OPTIONS=(' '  --audio-mode off' ')'
+  "$SCRIPTS/omarchy-rdp-server" || fail "server exited non-zero"
+  assert_contains "$(argv)" "--audio-mode off"
+}
+
 t_server_username_fallback() {
   setup_env
   configure_all

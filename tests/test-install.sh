@@ -44,6 +44,7 @@ t_install_clean_tree() {
     assert_eq "755" "$(stat -c '%a' "$BIN_DIR/$h")"
   done
   [[ -f $UNIT_FILE ]] || fail "missing unit file"
+  assert_contains "$(cat "$STUB_LOG")" "systemctl --user set-environment XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user daemon-reload"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user enable --now hypr-rdp.service"
   assert_eq "$PLUGIN_ID" "$(cat "$LEDGER/owner")"
@@ -92,6 +93,15 @@ t_install_creates_tls_once() {
   assert_eq "$before" "$after"
 }
 
+t_install_works_without_xdg_runtime_dir() {
+  case_setup
+  local out
+  out="$(env -u XDG_RUNTIME_DIR "$ROOT_DIR/install.sh" --skip-password)" \
+    || fail "install.sh should work without XDG_RUNTIME_DIR"
+  assert_contains "$out" '"installed":'
+  assert_file_absent "$XDG_RUNTIME_DIR/hypr-rdp/password"
+}
+
 t_install_skip_password() {
   case_setup
   local out
@@ -111,6 +121,21 @@ t_install_refuses_symlinked_target() {
   assert_contains "$out" "omarchy-rdp-stop"
   if [[ -f $UNIT_FILE ]]; then fail "nothing may be installed when the pre-flight refuses"; fi
   assert_not_contains "$(cat "$STUB_LOG")" "daemon-reload"
+}
+
+t_install_refuses_symlinked_parent_for_missing_target() {
+  case_setup
+  local outside="$TEST_TMP/outside-bin"
+  mkdir -p "$HOME/.local" "$outside"
+  ln -s "$outside" "$BIN_DIR"
+
+  local out rc
+  out="$(install_run --skip-password 2>&1)"
+  rc=$?
+  assert_eq "3" "$rc"
+  assert_contains "$out" "symlinked path"
+  assert_file_absent "$outside/omarchy-rdp-server"
+  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add"
 }
 
 t_install_refuses_foreign_marker() {
@@ -135,6 +160,22 @@ t_install_refuses_modified_managed_file() {
   rc=$?
   assert_eq "3" "$rc"
   assert_contains "$out" "omarchy-rdp-status"
+}
+
+t_install_refuses_partial_tls_identity() {
+  case_setup
+  mkdir -p "$CONF_DIR"
+  printf 'existing-certificate\n' > "$CONF_DIR/tls.crt"
+
+  local out rc
+  out="$(install_run --skip-password 2>&1)"
+  rc=$?
+  assert_eq "3" "$rc"
+  assert_contains "$out" "incomplete TLS identity"
+  assert_eq "existing-certificate" "$(cat "$CONF_DIR/tls.crt")"
+  assert_file_absent "$CONF_DIR/tls.key"
+  assert_file_absent "$BIN_DIR/omarchy-rdp-server"
+  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add"
 }
 
 t_install_idempotent() {

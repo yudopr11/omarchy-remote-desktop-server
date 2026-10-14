@@ -5,7 +5,7 @@ import qs.Commons
 import qs.Ui
 
 // The Remote Desktop panel: status, power, credentials, network, display and the
-// advanced video options, all driven through the helpers bundled next to this
+// advanced audio/video options, all driven through the helpers bundled next to this
 // file. Nothing here talks to hypr-rdp itself — every mutation goes through a
 // script, so the panel and the runtime it drives always ship together and the
 // same validation applies whether a value was typed here or in a terminal.
@@ -49,6 +49,7 @@ Panel {
   property int formBitrateMbit: 8
   property string formBackend: "auto"
   property string formCapture: "none"
+  property string formAudioMode: "default"
 
   readonly property bool haveStatus: status !== null
   readonly property bool installed: haveStatus && status.installed === true
@@ -125,6 +126,7 @@ Panel {
     formBitrateMbit = config.bitrate ? Math.max(1, Math.round(Number(config.bitrate) / 1000000)) : 8
     formBackend = config.h264Backend ? String(config.h264Backend) : "auto"
     formCapture = config.captureMode ? String(config.captureMode) : "none"
+    formAudioMode = config.audioMode ? String(config.audioMode) : "default"
     syncPending = false
   }
 
@@ -261,9 +263,10 @@ Panel {
                 "--fps", String(formFps),
                 "--bitrate", String(formBitrateMbit * 1000000),
                 "--h264-backend", formBackend,
-                "--capture-mode", formCapture]
+                "--capture-mode", formCapture,
+                "--audio-mode", formAudioMode]
     root.restartAfter = true
-    runAction(args, "Applying video settings")
+    runAction(args, "Applying advanced settings")
   }
 
   function watchLogs() {
@@ -712,7 +715,7 @@ Panel {
 
           PanelSectionHeader {
             width: parent.width - advancedToggle.width - parent.spacing
-            text: "VIDEO"
+            text: "ADVANCED"
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -729,6 +732,26 @@ Panel {
           width: parent.width
           spacing: Style.space(8)
           visible: advancedOpen
+
+          PanelSectionHeader { text: "AUDIO"; foreground: root.foreground; fontFamily: root.fontFamily }
+
+          Dropdown {
+            width: parent.width
+            label: "Audio mode"
+            value: root.formAudioMode
+            options: [
+              { value: "default", label: "Default (hypr-rdp)" },
+              { value: "off", label: "Off" },
+              { value: "redirect", label: "Redirect" },
+              { value: "mirror", label: "Mirror" }
+            ]
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onChanged: function(value) { root.formAudioMode = value }
+          }
+
+          PanelSeparator { foreground: root.foreground }
+          PanelSectionHeader { text: "VIDEO"; foreground: root.foreground; fontFamily: root.fontFamily }
 
           NumberField {
             width: parent.width
@@ -782,7 +805,7 @@ Panel {
 
           Button {
             width: parent.width
-            text: "Apply video settings"
+            text: "Apply advanced settings"
             bordered: true
             enabled: !root.busy && root.installed
             foreground: root.foreground

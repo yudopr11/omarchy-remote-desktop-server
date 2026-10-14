@@ -18,6 +18,7 @@ DEFAULT_PORT=3389
 
 BIN_DIR="$HOME/.local/bin"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 UNIT_DIR="$CONFIG_HOME/systemd/user"
 CONF_DIR="$CONFIG_HOME/hypr-rdp"
 
@@ -81,6 +82,9 @@ fi
 # refusal leaves the machine exactly as it was.
 check_target() {
   local target="$1" source="$2"
+  if ! no_symlink_in_path "$target"; then
+    refuse "$target (symlinked path)"
+  fi
   if [[ ! -e $target && ! -L $target ]]; then
     return 0
   fi
@@ -89,9 +93,6 @@ check_target() {
   fi
   if [[ ! -f $target ]]; then
     refuse "$target (not a regular file)"
-  fi
-  if ! no_symlink_in_path "$target"; then
-    refuse "$target (symlinked path)"
   fi
   if ! is_managed_target "$target" "$source"; then
     refuse "$target (modified since it was installed)"
@@ -102,6 +103,17 @@ for helper in "${HELPERS[@]}"; do
   check_target "$BIN_DIR/$helper" "$SCRIPT_DIR/scripts/$helper"
 done
 check_target "$UNIT_DIR/$UNIT_NAME" "$SCRIPT_DIR/systemd/$UNIT_NAME"
+
+# A certificate and its key are one identity. Refuse a partial pair instead of
+# replacing an existing certificate/key while trying to repair it implicitly.
+tls_cert_present=false
+tls_key_present=false
+if [[ -e $CONF_DIR/tls.crt || -L $CONF_DIR/tls.crt ]]; then tls_cert_present=true; fi
+if [[ -e $CONF_DIR/tls.key || -L $CONF_DIR/tls.key ]]; then tls_key_present=true; fi
+if [[ $tls_cert_present != $tls_key_present ]] || \
+   { [[ $tls_cert_present == true ]] && { [[ ! -f $CONF_DIR/tls.crt || ! -f $CONF_DIR/tls.key ]]; }; }; then
+  refuse "$CONF_DIR (incomplete TLS identity: tls.crt and tls.key must both be present)"
+fi
 
 # The engine itself comes from the AUR. Install it before anything is written, so
 # a package step that fails leaves the machine as it was. The probe is the same
@@ -161,7 +173,7 @@ fi
 
 # TLS identity: created once, never replaced (clients remember the fingerprint).
 tls_created=false
-if [[ ! -f $CONF_DIR/tls.crt || ! -f $CONF_DIR/tls.key ]]; then
+if [[ $tls_cert_present == false ]]; then
   mkdir -p "$CONF_DIR"
   tls_host="$(hostname -f 2>/dev/null || true)"
   [[ -n $tls_host ]] || tls_host="$(uname -n)"
@@ -172,6 +184,7 @@ if [[ ! -f $CONF_DIR/tls.crt || ! -f $CONF_DIR/tls.key ]]; then
   tls_created=true
 fi
 
+systemctl --user set-environment "XDG_CONFIG_HOME=$CONFIG_HOME"
 systemctl --user daemon-reload
 systemctl --user enable --now "$UNIT_NAME"
 
@@ -182,7 +195,7 @@ systemctl --user enable --now "$UNIT_NAME"
 # "add what is missing".
 password_ok=false
 armed=false
-if [[ -s $XDG_RUNTIME_DIR/hypr-rdp/password || -s $CONF_DIR/password ]]; then
+if [[ -s $RUNTIME_DIR/hypr-rdp/password || -s $CONF_DIR/password ]]; then
   armed=true
 fi
 if [[ $skip_password == false && $armed == false ]]; then

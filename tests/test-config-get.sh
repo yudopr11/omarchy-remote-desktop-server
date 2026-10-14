@@ -17,16 +17,27 @@ t_get_defaults() {
   assert_contains "$out" '"bitrate":8000000'
   assert_contains "$out" '"h264Backend":""'
   assert_contains "$out" '"captureMode":""'
+  assert_contains "$out" '"audioMode":""'
   assert_contains "$out" '"unknownFlags":[]'
   assert_contains "$out" '"monitors":[]'
   assert_contains "$out" '"addresses":[]'
+}
+
+t_get_empty_password_is_not_stored() {
+  setup_env
+  mkdir -p "$XDG_CONFIG_HOME/hypr-rdp"
+  : > "$XDG_CONFIG_HOME/hypr-rdp/password"
+
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" get)" || fail "get exited non-zero"
+  assert_contains "$out" '"storedPassword":false'
 }
 
 t_get_reads_options() {
   setup_env
   write_options 'BIND="0.0.0.0:13389"' 'USERNAME="admin"' 'OPTIONS=(' \
     '  --fps 45' '  --bitrate 12000000' '  --h264-backend vaapi' \
-    '  --capture-mode ext' '  --output DP-3' ')'
+    '  --capture-mode ext' '  --audio-mode mirror' '  --output DP-3' ')'
 
   local out
   out="$("$SCRIPTS/omarchy-rdp-config" get)" || fail "get exited non-zero"
@@ -40,6 +51,7 @@ t_get_reads_options() {
   assert_contains "$out" '"bitrate":12000000'
   assert_contains "$out" '"h264Backend":"vaapi"'
   assert_contains "$out" '"captureMode":"ext"'
+  assert_contains "$out" '"audioMode":"mirror"'
 }
 
 t_get_reads_single_line_options() {

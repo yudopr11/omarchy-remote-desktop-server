@@ -3,10 +3,10 @@ Description=Native RDP server for the Omarchy Hyprland session
 Documentation=https://github.com/MuNeNICK/hypr-rdp
 After=graphical-session.target
 PartOf=graphical-session.target
-# Same-type conditions are OR'd: arm from a session password in tmpfs
-# (omarchy-rdp-password) or a stored one in ~/.config/hypr-rdp/password.
-ConditionPathExists=%t/hypr-rdp/password
-ConditionPathExists=%h/.config/hypr-rdp/password
+# Trigger on either nonempty password file: session-only in tmpfs
+# (omarchy-rdp-password), or the stored copy used by autostart.
+ConditionFileNotEmpty=|%t/hypr-rdp/password
+ConditionFileNotEmpty=|%E/hypr-rdp/password
 
 [Service]
 Type=simple

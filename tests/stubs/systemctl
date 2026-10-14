@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # systemctl stub (tests only). State files under $STUB_STATE:
-#   systemctl.is-active   exit code for is-active (absent -> 1)
+#   systemctl.is-active   exit code for is-active (absent -> 3, inactive)
 #   systemctl.is-enabled  stdout for is-enabled (absent -> exit 1)
 #   systemctl.cat         stdout for cat (absent -> exit 1)
 #   systemctl.out         stdout for any other subcommand (absent -> empty)
@@ -18,7 +18,7 @@ case "$sub" in
       code="$(cat "$STUB_STATE/systemctl.is-active")"
       exit "${code:-1}"
     fi
-    exit 1
+    exit 3
     ;;
   is-enabled)
     if [[ -f $STUB_STATE/systemctl.is-enabled ]]; then
@@ -32,6 +32,9 @@ case "$sub" in
     exit 1
     ;;
   *)
+    if [[ -f $STUB_STATE/systemctl.$sub.exit ]]; then
+      exit "$(cat "$STUB_STATE/systemctl.$sub.exit")"
+    fi
     case "$sub" in
       start) printf '0' > "$STUB_STATE/systemctl.is-active" ;;
       stop) printf '1' > "$STUB_STATE/systemctl.is-active" ;;

@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/hypr-rdp"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-rdp"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT="hypr-rdp.service"
 UNIT_FILE="$UNIT_DIR/$UNIT"
@@ -153,9 +153,9 @@ if [[ -n $host && $port -gt 0 ]]; then
 fi
 
 runtime_password=false
-if [[ -f $RUNTIME_DIR/password ]]; then runtime_password=true; fi
+if [[ -s $RUNTIME_DIR/password ]]; then runtime_password=true; fi
 stored_password=false
-if [[ -f $CONF_DIR/password ]]; then stored_password=true; fi
+if [[ -s $CONF_DIR/password ]]; then stored_password=true; fi
 
 # armed: the service can start (now, or at next login from the stored copy)
 # without an interactive password prompt.

@@ -3,7 +3,7 @@
 A bar widget and panel that run [hypr-rdp](https://github.com/MuNeNICK/hypr-rdp) on an
 Omarchy machine: start and stop the server, set the RDP password, choose the interface and
 port to listen on, pick the screen to share, and arm the server to come back with your
-session — all without editing a config file or memorising flags.
+session, and choose whether/how to send audio — all without editing a config file or memorising flags.
 
 The panel is the only control surface, and it drives the helpers that ship in this repo, so
 the UI and the runtime it manages are always the same version.
@@ -38,7 +38,7 @@ the TLS certificate.
 | Network | Listen on this machine only, any interface, a specific address, or a hostname you type; port (default 3389); **Copy address**; a warning when the bind is not loopback. |
 | Display | A physical monitor (with its resolution) or a virtual display. |
 | Start at login | Arms the service for future sessions; the first enable stores the password on disk so the service can come back without you. |
-| Video | Frames per second, bitrate, H.264 backend and capture mode. |
+| Advanced | Audio mode (**Default**, **Off**, **Redirect**, **Mirror**) and video settings: frames per second, bitrate, H.264 backend and capture mode. |
 | Footer | **Refresh**, **Logs** (`journalctl --user -u hypr-rdp.service -b`), and a reminder that changing settings restarts the service. |
 
 Changing a setting restarts the service, so connected clients reconnect. The panel refreshes
@@ -58,11 +58,13 @@ omarchy-rdp-config set bind --mode localhost|lan|custom [--host H] [--port P]
 omarchy-rdp-config set username --value U
 omarchy-rdp-config set output --value NAME|virtual
 omarchy-rdp-config set opt --fps N | --bitrate BPS | --h264-backend auto|software|vaapi \
-                        | --capture-mode wlr|ext|none
+                        | --capture-mode wlr|ext|none | --audio-mode default|off|redirect|mirror
 omarchy-rdp-config set autostart --value on|off
 omarchy-rdp-config restart             # restart only if it was running, then wait for the listener
 omarchy-rdp-config start               # start an inactive service and wait for the listener
 ```
+
+`omarchy-rdp-config set opt --audio-mode default` removes the explicit audio flag and restores hypr-rdp's own default; `off`, `redirect` and `mirror` select its supported audio modes.
 
 `omarchy-rdp-status` prints a single JSON object:
 `installed`, `configured`, `armed`, `active`, `serviceKnown`, `listening`, `bind`, `endpoint`,
@@ -96,6 +98,10 @@ omarchy-shell shell toggle io.github.yudopr11.omarchy-remote-desktop-server
 | `~/.config/systemd/user/hypr-rdp.service` | The user unit, started with the graphical session. |
 | `~/.local/state/omarchy-rdp/installed-files/` | Ownership ledger: which files this plugin installed, and their checksums. |
 
+Config paths use `$XDG_CONFIG_HOME` when set, otherwise `~/.config`. Before a unit start or
+reload, the helper synchronizes that path with the user systemd manager so `%E` resolves to
+the same directory.
+
 ## Security
 
 - RDP gets its own credential — `hypr-rdp` uses a username/password pair, not your PAM
@@ -121,7 +127,7 @@ bash tests/run.sh              # whole suite; bash tests/run.sh test-status.sh f
 ```
 
 `tests/` runs against temporary `HOME`/`XDG_*` directories and stubbed system commands
-(`systemctl`, `ss`, `ip`, `hyprctl`, …), so it never touches a real install and needs no root.
+(`systemctl`, `ss`, `ip`, `hyprctl`, …), plus `systemd-analyze` to verify the real unit conditions; it never touches a real install and needs no root.
 QML changes are live after the shell reloads the plugin; the panel's own actions can be
 reproduced with the helpers above.
 

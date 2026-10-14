@@ -14,6 +14,33 @@ t_stop_active() {
   assert_file_absent "$XDG_RUNTIME_DIR/hypr-rdp/password"
 }
 
+t_stop_preserves_password_when_stop_fails() {
+  setup_env
+  mkdir -p "$XDG_RUNTIME_DIR/hypr-rdp"
+  printf 'pw\n' > "$XDG_RUNTIME_DIR/hypr-rdp/password"
+  printf '0' > "$STUB_STATE/systemctl.is-active"
+  printf '1' > "$STUB_STATE/systemctl.stop.exit"
+
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-stop" 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"error"'
+  assert_eq "pw" "$(cat "$XDG_RUNTIME_DIR/hypr-rdp/password")"
+}
+
+t_stop_refuses_unknown_service_state() {
+  setup_env
+  mkdir -p "$XDG_RUNTIME_DIR/hypr-rdp"
+  printf 'pw\n' > "$XDG_RUNTIME_DIR/hypr-rdp/password"
+  printf '1' > "$STUB_STATE/systemctl.is-active"
+
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-stop" 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"error"'
+  assert_eq "pw" "$(cat "$XDG_RUNTIME_DIR/hypr-rdp/password")"
+}
+
 t_stop_idempotent() {
   setup_env
   local out
@@ -47,6 +74,22 @@ t_stop_forget() {
   assert_file_absent "$XDG_CONFIG_HOME/hypr-rdp/password"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user disable hypr-rdp.service"
   assert_contains "$out" '"autostart":false'
+}
+
+t_stop_preserves_password_when_disable_fails() {
+  setup_env
+  mkdir -p "$XDG_CONFIG_HOME/hypr-rdp" "$XDG_RUNTIME_DIR/hypr-rdp"
+  printf 'pw\n' > "$XDG_CONFIG_HOME/hypr-rdp/password"
+  printf 'pw\n' > "$XDG_RUNTIME_DIR/hypr-rdp/password"
+  printf 'enabled' > "$STUB_STATE/systemctl.is-enabled"
+  printf '1' > "$STUB_STATE/systemctl.disable.exit"
+
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-stop" --forget 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"error"'
+  assert_eq "pw" "$(cat "$XDG_CONFIG_HOME/hypr-rdp/password")"
+  assert_eq "pw" "$(cat "$XDG_RUNTIME_DIR/hypr-rdp/password")"
 }
 
 t_stop_rejects_unknown_option() {

@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "yudopr11",
   "license": "MIT",
-  "description": "Manage the hypr-rdp server from the Omarchy bar: start and stop it, change credentials and bind address, pick the monitor, and start it at login.",
+  "description": "Manage the hypr-rdp server from the Omarchy bar: control power and autostart, set credentials and bind address, pick the monitor, and tune advanced audio/video options.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "BarWidget.qml"

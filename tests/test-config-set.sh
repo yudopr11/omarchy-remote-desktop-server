@@ -234,12 +234,31 @@ t_opt_capture_mode_none() {
   assert_contains "$(cat "$(options_path)")" '--fps 30'
 }
 
+t_opt_audio_mode_and_default() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"' 'OPTIONS=(' '  --fps 30' ')'
+  local mode out
+  for mode in off redirect mirror; do
+    out="$($SCRIPTS/omarchy-rdp-config set opt --audio-mode "$mode")" \
+      || fail "setting audio mode $mode failed"
+    assert_contains "$out" "\"audioMode\":\"$mode\""
+    assert_eq "1" "$(count_lines "^  --audio-mode $mode$")"
+  done
+
+  out="$($SCRIPTS/omarchy-rdp-config set opt --audio-mode default)" \
+    || fail "resetting audio mode failed"
+  assert_contains "$out" '"audioMode":""'
+  assert_eq "0" "$(count_lines 'audio-mode')"
+  assert_contains "$(cat "$(options_path)")" '--fps 30'
+}
+
 t_opt_rejects_out_of_range() {
   setup_env
   write_options 'BIND="127.0.0.1:3389"' 'OPTIONS=(' '  --fps 30' ')'
   local before after args out
   for args in "--fps 0" "--fps 121" "--fps abc" "--bitrate 99999" \
-              "--bitrate 100000001" "--h264-backend nvenc" "--capture-mode portal"; do
+              "--bitrate 100000001" "--h264-backend nvenc" "--capture-mode portal" \
+              "--audio-mode disabled"; do
     before="$(options_sha)"
     # shellcheck disable=SC2086
     out="$("$SCRIPTS/omarchy-rdp-config" set opt $args 2>&1)"
@@ -261,6 +280,19 @@ t_autostart_on_copies_password_and_enables() {
   assert_eq "a-very-secret-password" "$(cat "$XDG_CONFIG_HOME/hypr-rdp/password")"
   assert_eq "600" "$(stat -c '%a' "$XDG_CONFIG_HOME/hypr-rdp/password")"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user enable hypr-rdp.service"
+}
+
+t_autostart_on_does_not_store_password_when_enable_fails() {
+  setup_env
+  mkdir -p "$XDG_RUNTIME_DIR/hypr-rdp"
+  printf 'new-secret\n' > "$XDG_RUNTIME_DIR/hypr-rdp/password"
+  printf '1' > "$STUB_STATE/systemctl.enable.exit"
+
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set autostart --value on 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"error"'
+  assert_file_absent "$XDG_CONFIG_HOME/hypr-rdp/password"
 }
 
 t_autostart_on_refuses_without_runtime_password() {
@@ -285,6 +317,19 @@ t_autostart_off_removes_copy_and_disables() {
   assert_contains "$out" '"storedPassword":false'
   assert_file_absent "$XDG_CONFIG_HOME/hypr-rdp/password"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user disable hypr-rdp.service"
+}
+
+t_autostart_off_preserves_password_when_disable_fails() {
+  setup_env
+  mkdir -p "$XDG_CONFIG_HOME/hypr-rdp"
+  printf 'old-secret\n' > "$XDG_CONFIG_HOME/hypr-rdp/password"
+  printf 'enabled' > "$STUB_STATE/systemctl.is-enabled"
+  printf '1' > "$STUB_STATE/systemctl.disable.exit"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" set autostart --value off 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"error"'
+  assert_eq "old-secret" "$(cat "$XDG_CONFIG_HOME/hypr-rdp/password")"
 }
 
 t_restart_waits_for_our_listener() {
@@ -348,6 +393,7 @@ t_start_brings_inactive_unit_up() {
   out="$("$SCRIPTS/omarchy-rdp-config" start)" || fail "start exited non-zero"
   assert_contains "$out" '"started":true'
   assert_contains "$out" '"ready":true'
+  assert_contains "$(cat "$STUB_LOG")" "systemctl --user set-environment XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
   assert_contains "$(cat "$STUB_LOG")" "systemctl --user start hypr-rdp.service"
   assert_not_contains "$(cat "$STUB_LOG")" "restart hypr-rdp.service"
 }
