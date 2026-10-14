@@ -16,6 +16,12 @@ ROOT_DIR="$(dirname "$TESTS_DIR")"
 SCRIPTS="$ROOT_DIR/scripts"
 STUB_DIR="$TESTS_DIR/stubs"
 : "${ORIGINAL_PATH:=$PATH}"
+# The developer's real HOME, captured before setup_env repoints it. Paths that
+# depend on HOME/XDG_* MUST be computed inside a case (after setup_env): a
+# variable assigned at file scope keeps the real dotfiles path, and a test that
+# writes through it clobbers the machine running the suite (this happened).
+: "${ORIGINAL_HOME:=$HOME}"
+export ORIGINAL_HOME
 
 FAILURES=0
 CASE=""
@@ -46,6 +52,29 @@ setup_env() {
     ln -sf "$stub" "$TEST_TMP/bin/$(basename "$stub")"
   done
   export PATH="$TEST_TMP/bin:$ORIGINAL_PATH"
+  warn_real_home_paths
+}
+
+# warn_real_home_paths — loud note when a *_DIR / *_FILE / *_HOME / LEDGER
+# variable still points into the real home while a case runs. Those are the names
+# the install tests use for live destinations (BIN_DIR, CONF_DIR, UNIT_FILE,
+# LEDGER); a path captured before setup_env is a write waiting to happen.
+# Warning, not failure: an unrelated name could legitimately match.
+warn_real_home_paths() {
+  local name value
+  while IFS= read -r name; do
+    case "$name" in
+      ROOT_DIR|TESTS_DIR|STUB_DIR|XDG_*|PI_*|TMPDIR) continue ;;
+    esac
+    case "$name" in
+      *_DIR|*_FILE|*_HOME|LEDGER) ;;
+      *) continue ;;
+    esac
+    value="${!name-}"
+    case "$value" in
+      "$ORIGINAL_HOME"/*) printf 'harness: %s=%s still points into the real home\n' "$name" "$value" >&2 ;;
+    esac
+  done < <(compgen -v 2>/dev/null || true)
 }
 
 # write_options <line>... — write a hypr-rdp options file into the case HOME.

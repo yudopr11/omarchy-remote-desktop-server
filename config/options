@@ -1,0 +1,20 @@
+# Sourced by ~/.local/bin/omarchy-rdp-server.
+# A fresh install listens on loopback and creates a virtual display: pick a
+# monitor and a bind address from the panel (or edit here) before connecting.
+# Set 0.0.0.0:3389 explicitly only for a trusted LAN/VPN; never expose it to the
+# internet.
+BIND="127.0.0.1:3389"
+
+OPTIONS=(
+  --h264-backend auto
+  --fps 30
+  --bitrate 8000000
+  --max-frames-in-flight 4
+)
+
+# Optional examples:
+#   --audio-mode off
+#   --capture-mode ext
+#   --resolution 1920x1080
+#   --scale 1.5
+#   --output HDMI-A-1

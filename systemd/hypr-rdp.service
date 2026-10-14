@@ -1,0 +1,26 @@
+[Unit]
+Description=Native RDP server for the Omarchy Hyprland session
+Documentation=https://github.com/MuNeNICK/hypr-rdp
+After=graphical-session.target
+PartOf=graphical-session.target
+# Same-type conditions are OR'd: arm from a session password in tmpfs
+# (omarchy-rdp-password) or a stored one in ~/.config/hypr-rdp/password.
+ConditionPathExists=%t/hypr-rdp/password
+ConditionPathExists=%h/.config/hypr-rdp/password
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/omarchy-rdp-server
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=graphical-session.target
