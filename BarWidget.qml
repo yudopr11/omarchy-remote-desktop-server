@@ -39,7 +39,7 @@ BarWidget {
     loader.item.hostWidget = root
   }
 
-  implicitWidth: markSize + Style.space(4)
+  implicitWidth: markSize + Style.space(12)
   implicitHeight: button.implicitHeight
   onBarChanged: inject()
   onSettingsChanged: inject()
@@ -72,7 +72,6 @@ BarWidget {
   Item {
     id: mark
     anchors.centerIn: parent
-    anchors.horizontalCenterOffset: Style.space(2)
     opacity: root.serverActive ? 1.0 : 0.45
     width: root.markSize
     height: root.markSize
@@ -103,6 +102,7 @@ BarWidget {
     bar: root.bar
     text: ""
     keepSpace: true
+    hasVisualContent: true
     tooltipText: "Remote Desktop"
     horizontalMargin: 0
     verticalPadding: 0
