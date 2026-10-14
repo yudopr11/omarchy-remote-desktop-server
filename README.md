@@ -11,8 +11,8 @@ the UI and the runtime it manages are always the same version.
 ## Requirements
 
 - Omarchy (the shell, `omarchy` CLI and `omarchy-launch-terminal`).
-- `hypr-rdp` — an AUR package (`omarchy-pkg-add hypr-rdp` is what the panel's **Install**
-  button runs).
+- `hypr-rdp` — an AUR package (`omarchy-pkg-aur-add hypr-rdp` is what the panel's
+  **Install** button runs).
 - `openssl` — used once to create the self-signed TLS identity.
 
 ## Install

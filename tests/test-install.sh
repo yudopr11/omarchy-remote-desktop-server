@@ -135,7 +135,7 @@ t_install_refuses_symlinked_parent_for_missing_target() {
   assert_eq "3" "$rc"
   assert_contains "$out" "symlinked path"
   assert_file_absent "$outside/omarchy-rdp-server"
-  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add"
+  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-aur-add"
 }
 
 t_install_refuses_foreign_marker() {
@@ -175,7 +175,7 @@ t_install_refuses_partial_tls_identity() {
   assert_eq "existing-certificate" "$(cat "$CONF_DIR/tls.crt")"
   assert_file_absent "$CONF_DIR/tls.key"
   assert_file_absent "$BIN_DIR/omarchy-rdp-server"
-  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add"
+  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-aur-add"
 }
 
 t_install_idempotent() {
@@ -200,13 +200,13 @@ t_install_no_password_in_log() {
 }
 
 # The engine package is the one thing install.sh cannot copy into place: it comes
-# from the AUR through omarchy-pkg-add. Absence is expressed the same way status
-# does it, by the run probe failing.
+# from the AUR through Omarchy's AUR package helper. Absence is expressed the
+# same way status does it, by the run probe failing.
 t_install_installs_missing_package() {
   case_setup
   stub_password_helper
   install_run --skip-password >/dev/null || fail "install.sh exited non-zero"
-  assert_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add hypr-rdp"
+  assert_contains "$(cat "$STUB_LOG")" "omarchy-pkg-aur-add hypr-rdp"
 }
 
 t_install_skips_package_when_present() {
@@ -214,16 +214,18 @@ t_install_skips_package_when_present() {
   stub_password_helper
   printf 'hypr-rdp 0.1.6\n' > "$STUB_STATE/hypr-rdp.version"
   install_run --skip-password >/dev/null || fail "install.sh exited non-zero"
-  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add"
+  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-aur-add"
 }
 
 t_install_stops_when_package_install_fails() {
   case_setup
   stub_password_helper
-  printf '1\n' > "$STUB_STATE/omarchy-pkg-add.exit"
-  if install_run --skip-password >/dev/null 2>&1; then
-    fail "install.sh should fail when the package cannot be installed"
-  fi
+  printf '1\n' > "$STUB_STATE/omarchy-pkg-aur-add.exit"
+  local out rc
+  out="$(install_run --skip-password 2>&1)"
+  rc=$?
+  assert_eq "1" "$rc"
+  assert_contains "$out" "omarchy-pkg-aur-add failed"
   assert_file_absent "$BIN_DIR/omarchy-rdp-server"
   assert_file_absent "$UNIT_FILE"
 }

@@ -119,8 +119,8 @@ fi
 # a package step that fails leaves the machine as it was. The probe is the same
 # run probe `omarchy-rdp-status` uses, so a test stub can stand in for absence.
 if ! hypr-rdp --version >/dev/null 2>&1; then
-  if ! omarchy-pkg-add hypr-rdp; then
-    printf 'install.sh: hypr-rdp is missing and omarchy-pkg-add failed\n' >&2
+  if ! omarchy-pkg-aur-add hypr-rdp; then
+    printf 'install.sh: hypr-rdp is missing and omarchy-pkg-aur-add failed\n' >&2
     exit 1
   fi
 fi
