@@ -335,3 +335,32 @@ t_restart_inactive_is_a_noop() {
   assert_contains "$out" '"ready":true'
   assert_not_contains "$(cat "$STUB_LOG")" "restart"
 }
+
+# `start` is the panel's power switch: `restart` intentionally skips an inactive
+# unit, so bringing a stopped server up needs its own command.
+t_start_brings_inactive_unit_up() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"'
+  printf '1' > "$STUB_STATE/systemctl.is-active"
+  printf 'LISTEN 0 4096 127.0.0.1:3389 0.0.0.0:* users:(("hypr-rdp",pid=1234,fd=7))\n' \
+    > "$STUB_STATE/ss.listen"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" start)" || fail "start exited non-zero"
+  assert_contains "$out" '"started":true'
+  assert_contains "$out" '"ready":true'
+  assert_contains "$(cat "$STUB_LOG")" "systemctl --user start hypr-rdp.service"
+  assert_not_contains "$(cat "$STUB_LOG")" "restart hypr-rdp.service"
+}
+
+t_start_reports_failure_when_not_listening() {
+  setup_env
+  write_options 'BIND="127.0.0.1:3389"'
+  printf '1' > "$STUB_STATE/systemctl.is-active"
+  printf 'hypr-rdp: port busy\n' > "$STUB_STATE/journalctl.out"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-config" start 2>&1)"
+  assert_eq "1" "$?"
+  assert_contains "$out" '"ready":false'
+  assert_contains "$out" 'port busy'
+  assert_contains "$(cat "$STUB_LOG")" "journalctl --user -u hypr-rdp.service -n 20 --no-pager"
+}

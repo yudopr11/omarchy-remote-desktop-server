@@ -45,6 +45,7 @@ usage: omarchy-rdp-config get
                              | --capture-mode wlr|ext|none
        omarchy-rdp-config set autostart --value on|off
        omarchy-rdp-config restart
+       omarchy-rdp-config start
 USAGE
 }
 
@@ -680,16 +681,9 @@ listener_is_ours_or_unknown() {
 # cmd_restart — apply a config change and wait until the server is really up:
 # the unit is active again *and* the port is served by our process. A foreign
 # listener on the same port must not be mistaken for readiness.
-cmd_restart() {
-  if ! systemctl --user is-active "$UNIT" >/dev/null 2>&1; then
-    # Nothing is running, so there is nothing to restart and no listener to
-    # wait for; the panel reads the stopped state from `status`.
-    printf '{"restarted":false,"ready":true,"reason":"service is not running"}\n'
-    return 0
-  fi
-
-  systemctl --user restart "$UNIT" >/dev/null 2>&1 || true
-
+# wait_for_ready — poll until the unit is active and something we can call ours
+# listens on the configured port. Shared by `start` and `restart`.
+wait_for_ready() {
   read_config
   local port=0
   if [[ $bind == *:* ]]; then
@@ -697,24 +691,52 @@ cmd_restart() {
     if [[ ! $port =~ ^[0-9]+$ ]]; then port=0; fi
   fi
 
-  local try ready=false
+  local try
   for (( try = 0; try < 50; try++ )); do
     if systemctl --user is-active "$UNIT" >/dev/null 2>&1 \
        && (( port > 0 )) && listener_is_ours_or_unknown "$port"; then
-      ready=true
-      break
+      return 0
     fi
     sleep 0.1
   done
+  return 1
+}
 
-  if [[ $ready == true ]]; then
+journal_tail() {
+  journalctl --user -u "$UNIT" -n 20 --no-pager 2>&1 || true
+}
+
+# cmd_restart — apply a config change and wait until the server is really up:
+# "systemd says active" is not enough, and a foreign process holding the port is
+# not this server. An inactive unit is left alone on purpose (a disarmed server
+# must not come back by itself), which is why `start` exists separately.
+cmd_restart() {
+  if ! systemctl --user is-active "$UNIT" >/dev/null 2>&1; then
+    printf '{"restarted":false,"ready":true,"reason":"service is not running"}\n'
+    return 0
+  fi
+
+  systemctl --user restart "$UNIT" >/dev/null 2>&1 || true
+
+  if wait_for_ready; then
     printf '{"restarted":true,"ready":true}\n'
     return 0
   fi
 
-  local journal
-  journal="$(journalctl --user -u "$UNIT" -n 20 --no-pager 2>&1 || true)"
-  printf '{"restarted":true,"ready":false,"journal":"%s"}\n' "$(json_escape "$journal")"
+  printf '{"restarted":true,"ready":false,"journal":"%s"}\n' "$(json_escape "$(journal_tail)")"
+  exit 1
+}
+
+# cmd_start — the panel's power switch: bring the unit up and wait for readiness.
+cmd_start() {
+  systemctl --user start "$UNIT" >/dev/null 2>&1 || true
+
+  if wait_for_ready; then
+    printf '{"started":true,"ready":true}\n'
+    return 0
+  fi
+
+  printf '{"started":true,"ready":false,"journal":"%s"}\n' "$(json_escape "$(journal_tail)")"
   exit 1
 }
 
@@ -727,6 +749,7 @@ case "$command" in
   get) cmd_get ;;
   set) cmd_set "$@" ;;
   restart) cmd_restart ;;
+  start) cmd_start ;;
   "") usage; exit 1 ;;
   *) usage; printf '{"error":"unknown command: %s"}\n' "$(json_escape "$command")"; exit 1 ;;
 esac
