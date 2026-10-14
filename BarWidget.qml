@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Shapes
+import QtQuick.Effects
 import qs.Commons
 import qs.Ui
 
@@ -9,16 +9,15 @@ import qs.Ui
 // contract the bar's popout coordinator expects. Panel.qml gets the host
 // objects it needs through inject().
 //
-// The mark is drawn rather than typed: a thin ring with the two inward
-// chevrons of the Remote Desktop logo. A transparent WidgetButton sits on top
-// so hover, tooltips and the bar's click registration keep working.
+// The mark is assets/remote-desktop.svg, tinted to the bar's foreground colour.
+// A transparent WidgetButton sits on top so hover, tooltips and the bar's click
+// registration keep working.
 BarWidget {
   id: root
   moduleName: "io.github.yudopr11.omarchy-remote-desktop-server"
 
   readonly property bool opened: loader.item ? loader.item.opened === true : false
-  readonly property real markSize: Math.max(12, Math.round(Style.bar.iconSlot * 0.85))
-  readonly property real markStroke: Math.max(1, markSize / 16)
+  readonly property real markSize: Math.max(12, Math.round(Style.bar.iconSlot))
   readonly property color markColor: root.bar ? root.bar.barForeground : Color.foreground
   readonly property real openPanelIndicatorWidth: markSize
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
@@ -50,42 +49,28 @@ BarWidget {
     onLoaded: { root.inject(); Qt.callLater(root.inject) }
   }
 
-  // Remote Desktop mark: a ring with the "> <" chevron pair inside.
+  // Remote Desktop mark: monitor, stand and the remote-connection badge.
   Item {
     id: mark
     anchors.centerIn: parent
     width: root.markSize
     height: root.markSize
 
-    Rectangle {
+    Image {
+      id: markImage
       anchors.fill: parent
-      color: "transparent"
-      radius: width / 2
-      border.width: root.markStroke
-      border.color: root.markColor
+      visible: false
+      source: Qt.resolvedUrl("assets/remote-desktop.svg")
+      sourceSize: Qt.size(Math.round(width * 2), Math.round(height * 2))
+      fillMode: Image.PreserveAspectFit
+      smooth: true
     }
 
-    Shape {
-      anchors.fill: parent
-
-      ShapePath {
-        strokeColor: root.markColor
-        strokeWidth: root.markStroke
-        fillColor: "transparent"
-        capStyle: ShapePath.RoundCap
-        joinStyle: ShapePath.MiterJoin
-
-        PathPolyline {
-          path: [Qt.point(mark.width * 0.31, mark.height * 0.35),
-                 Qt.point(mark.width * 0.47, mark.height * 0.50),
-                 Qt.point(mark.width * 0.31, mark.height * 0.65)]
-        }
-        PathPolyline {
-          path: [Qt.point(mark.width * 0.69, mark.height * 0.35),
-                 Qt.point(mark.width * 0.53, mark.height * 0.50),
-                 Qt.point(mark.width * 0.69, mark.height * 0.65)]
-        }
-      }
+    MultiEffect {
+      anchors.fill: markImage
+      source: markImage
+      colorization: 1.0
+      colorizationColor: root.markColor
     }
   }
 
