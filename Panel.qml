@@ -336,7 +336,9 @@ Panel {
     owner: root.hostWidget || root
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    // Drop the panel under the RDP pill; the framework clamps it to the screen
+    // edge, so a right-hand bar section cannot push it off-screen.
+    centerOnBar: false
     focusTarget: catcher
     contentWidth: popup.fittedContentWidth(Style.space(420))
     contentHeight: popup.fittedContentHeight(body.implicitHeight)
