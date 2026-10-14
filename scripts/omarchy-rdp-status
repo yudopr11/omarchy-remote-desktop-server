@@ -9,9 +9,28 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/hypr-rdp"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT="hypr-rdp.service"
+UNIT_FILE="$UNIT_DIR/$UNIT"
+BIN_DIR="$HOME/.local/bin"
 OPTIONS="$CONF_DIR/options"
+
+HELPERS=(omarchy-rdp-server omarchy-rdp-password omarchy-rdp-status
+         omarchy-rdp-stop omarchy-rdp-config)
+
+# Bundled runtime (spec §7.13): the panel runs the copies that ship with the
+# plugin and names that directory; run from the plugin's own scripts/ the parent
+# is it. Without a plugin directory the bundled side is unknown.
+if [[ -n ${OMARCHY_RDP_PLUGIN_DIR:-} && -d ${OMARCHY_RDP_PLUGIN_DIR:-} ]]; then
+  PLUGIN_DIR="$OMARCHY_RDP_PLUGIN_DIR"
+elif [[ -f "$(dirname "$SCRIPT_DIR")/manifest.json" ]]; then
+  PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
+else
+  PLUGIN_DIR=""
+fi
 
 # json_escape <string> — make a value safe to embed in a JSON string.
 json_escape() {
@@ -20,17 +39,26 @@ json_escape() {
   printf '%s' "${s//$'\n'/ }"
 }
 
+# file_sha <path> — content hash, for bundled-vs-installed drift.
+file_sha() { sha256sum < "$1" | cut -d' ' -f1; }
+
+# read_options — print BIND, USERNAME and every OPTIONS element NUL-separated.
+# Sourced in a subshell so a broken options file cannot abort the report.
+read_options() {
+  (
+    set +e +u
+    # shellcheck source=/dev/null
+    source "$OPTIONS" >/dev/null 2>&1 || exit 0
+    printf '%s\0' "${BIND:-}"
+    printf '%s\0' "${USERNAME:-}"
+    if declare -p OPTIONS >/dev/null 2>&1; then
+      local opt
+      for opt in "${OPTIONS[@]}"; do printf '%s\0' "$opt"; done
+    fi
+  )
+}
+
 # --- probes ------------------------------------------------------------------
-
-configured=false
-if [[ -f $OPTIONS ]]; then
-  configured=true
-fi
-
-# installed is a run probe, not a `command -v` lookup: the panel's Install
-# affordance should key off a binary that actually reports a version, and a
-# lookup cannot be stubbed away in tests while the real binary exists.
-# version is that same probe's output (spec §8).
 
 installed=false
 version=""
@@ -39,26 +67,154 @@ if out=$(hypr-rdp --version 2>/dev/null) && [[ -n $out ]]; then
   version="$out"
 fi
 
+configured=false
+if [[ -f $OPTIONS ]]; then
+  configured=true
+fi
+
+fields=()
+if [[ $configured == true ]]; then
+  while IFS= read -r -d '' field; do fields+=("$field"); done < <(read_options)
+fi
+
+bind="${fields[0]:-}"
+username="${fields[1]:-}"
+host=""
+port=0
+if [[ -n $bind ]]; then
+  if [[ $bind == *:* ]]; then
+    host="${bind%:*}"
+    port="${bind##*:}"
+    if [[ ! $port =~ ^[0-9]+$ ]]; then port=0; fi
+  else
+    host="$bind"
+  fi
+fi
+
+output=""
+index=2
+while (( index < ${#fields[@]} )); do
+  case "${fields[index]}" in
+    --output)
+      if (( index + 1 < ${#fields[@]} )); then
+        output="${fields[index + 1]}"
+        index=$((index + 2))
+      else
+        index=$((index + 1))
+      fi
+      ;;
+    --output=*)
+      output="${fields[index]#--output=}"
+      index=$((index + 1))
+      ;;
+    *) index=$((index + 1)) ;;
+  esac
+done
+virtual=true
+if [[ -n $output ]]; then virtual=false; fi
+
+service_known=false
+if systemctl --user cat "$UNIT" >/dev/null 2>&1; then service_known=true; fi
+
+active=false
+if systemctl --user is-active "$UNIT" >/dev/null 2>&1; then active=true; fi
+
+autostart=false
+enabled_state="$(systemctl --user is-enabled "$UNIT" 2>/dev/null || true)"
+if [[ $enabled_state == enabled ]]; then autostart=true; fi
+
+listening=false
+if (( port > 0 )); then
+  if ss -ltnH "sport = :$port" 2>/dev/null | grep -q .; then listening=true; fi
+fi
+
+# A loopback bind is its own endpoint; anything else is reachable at the address
+# this machine uses for the default route (fallback: first non-loopback address).
+endpoint=""
+if [[ -n $host && $port -gt 0 ]]; then
+  if [[ $host == 127.0.0.1 ]]; then
+    endpoint="$bind"
+  else
+    src=""
+    if route="$(ip -4 route get 1.1.1.1 2>/dev/null)"; then
+      if [[ $route =~ src[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        src="${BASH_REMATCH[1]}"
+      fi
+    fi
+    if [[ -z $src ]]; then
+      if addresses="$(hostname -I 2>/dev/null)"; then
+        for address in $addresses; do
+          if [[ $address != 127.* ]]; then src="$address"; break; fi
+        done
+      fi
+    fi
+    if [[ -n $src ]]; then endpoint="$src:$port"; else endpoint="unknown"; fi
+  fi
+fi
+
+runtime_password=false
+if [[ -f $RUNTIME_DIR/password ]]; then runtime_password=true; fi
+stored_password=false
+if [[ -f $CONF_DIR/password ]]; then stored_password=true; fi
+
+# armed: the service can start (now, or at next login from the stored copy)
+# without an interactive password prompt.
+armed=false
+if [[ $runtime_password == true || $stored_password == true ]]; then armed=true; fi
+
+runtime_installed=true
+for helper in "${HELPERS[@]}"; do
+  if [[ ! -f $BIN_DIR/$helper ]]; then runtime_installed=false; fi
+done
+if [[ ! -f $UNIT_FILE ]]; then runtime_installed=false; fi
+
+# runtimeStale: an installed runtime that no longer matches what the plugin
+# ships. Installing is the panel's job, so a runtime we cannot compare against
+# counts as stale rather than as verified.
+runtime_stale=false
+if [[ $runtime_installed == true ]]; then
+  if [[ -z $PLUGIN_DIR ]]; then
+    runtime_stale=true
+  else
+    if [[ -f $PLUGIN_DIR/systemd/$UNIT ]]; then
+      if [[ "$(file_sha "$PLUGIN_DIR/systemd/$UNIT")" != "$(file_sha "$UNIT_FILE")" ]]; then
+        runtime_stale=true
+      fi
+    else
+      runtime_stale=true
+    fi
+    for helper in "${HELPERS[@]}"; do
+      if [[ -f $PLUGIN_DIR/scripts/$helper ]]; then
+        if [[ "$(file_sha "$PLUGIN_DIR/scripts/$helper")" != "$(file_sha "$BIN_DIR/$helper")" ]]; then
+          runtime_stale=true
+        fi
+      else
+        runtime_stale=true
+      fi
+    done
+  fi
+fi
+
 # --- report ------------------------------------------------------------------
 
 printf '{"installed":%s,"configured":%s,"armed":%s,"active":%s,"serviceKnown":%s,"listening":%s,"bind":"%s","endpoint":"%s","host":"%s","port":%s,"username":"%s","output":"%s","virtual":%s,"autostart":%s,"storedPassword":%s,"version":"%s","runtimeInstalled":%s,"runtimeStale":%s}\n' \
   "$installed" \
   "$configured" \
-  false \
-  false \
-  false \
-  false \
-  "" \
-  "" \
-  "" \
-  0 \
-  "" \
-  "" \
-  false \
-  false \
-  false \
+  "$armed" \
+  "$active" \
+  "$service_known" \
+  "$listening" \
+  "$(json_escape "$bind")" \
+  "$(json_escape "$endpoint")" \
+  "$(json_escape "$host")" \
+  "$port" \
+  "$(json_escape "$username")" \
+  "$(json_escape "$output")" \
+  "$virtual" \
+  "$autostart" \
+  "$stored_password" \
   "$(json_escape "$version")" \
-  false \
-  false
+  "$runtime_installed" \
+  "$runtime_stale"
 
 exit 0
