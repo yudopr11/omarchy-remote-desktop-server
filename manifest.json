@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.yudopr11.omarchy-remote-desktop-server",
+  "name": "Remote Desktop",
+  "version": "0.1.0",
+  "author": "yudopr11",
+  "license": "MIT",
+  "description": "Manage the hypr-rdp server from the Omarchy bar: start and stop it, change credentials and bind address, pick the monitor, and start it at login.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Remote Desktop",
+    "description": "Start, stop and configure hypr-rdp",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
