@@ -3,7 +3,8 @@
 # omarchy-rdp-config — the only writer of the hypr-rdp runtime config.
 #
 # Reads `options` as text (never sourced), so a comment or an unknown line the
-# user added survives every write. Commands print JSON on stdout; contract:
+# user added survives every write. Writes are atomic (temp file + mv), keep mode
+# 0600 and leave a single options.bak. Commands print JSON on stdout; contract:
 # spec §8.
 #
 #   get
@@ -19,14 +20,22 @@ set -euo pipefail
 
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
 OPTIONS_FILE="$CONF_DIR/options"
+BACKUP_FILE="$CONF_DIR/options.bak"
 PASSWORD_FILE="$CONF_DIR/password"
 UNIT="hypr-rdp.service"
 
 DEFAULT_BIND="127.0.0.1:3389"
+DEFAULT_PORT=3389
 DEFAULT_FPS=30
 DEFAULT_BITRATE=8000000
 DEFAULT_H264_BACKEND="auto"
 DEFAULT_CAPTURE_MODE="wlr"
+
+TMP_FILE=""
+cleanup() {
+  if [[ -n $TMP_FILE && -e $TMP_FILE ]]; then rm -f "$TMP_FILE"; fi
+}
+trap cleanup EXIT
 
 usage() {
   cat >&2 <<'USAGE'
@@ -41,6 +50,8 @@ usage: omarchy-rdp-config get
 USAGE
 }
 
+# --- small helpers -----------------------------------------------------------
+
 # json_escape <string> — make a value safe to embed in a JSON string.
 json_escape() {
   local s=${1//\\/\\\\}
@@ -52,16 +63,29 @@ json_bool() {
   if [[ $1 == true ]]; then printf 'true'; else printf 'false'; fi
 }
 
+# error_json <message> — report a validation failure on stdout and stop.
+error_json() {
+  printf '{"error":"%s"}\n' "$(json_escape "$1")"
+  exit 1
+}
+
 # --- reading the options file ------------------------------------------------
 
-bind="$DEFAULT_BIND"
-username="$(id -un)"
-output=""
-fps="$DEFAULT_FPS"
-bitrate="$DEFAULT_BITRATE"
-h264_backend="$DEFAULT_H264_BACKEND"
-capture_mode="$DEFAULT_CAPTURE_MODE"
+bind="" username="" output=""
+fps="$DEFAULT_FPS" bitrate="$DEFAULT_BITRATE"
+h264_backend="$DEFAULT_H264_BACKEND" capture_mode="$DEFAULT_CAPTURE_MODE"
 unknown_flags=()
+
+reset_config_state() {
+  bind="$DEFAULT_BIND"
+  username="$(id -un)"
+  output=""
+  fps="$DEFAULT_FPS"
+  bitrate="$DEFAULT_BITRATE"
+  h264_backend="$DEFAULT_H264_BACKEND"
+  capture_mode="$DEFAULT_CAPTURE_MODE"
+  unknown_flags=()
+}
 
 record_option() {
   local flag="$1" value="${2:-}"
@@ -114,6 +138,7 @@ parse_option_tokens() {
 
 # read_config — fill the variables above from $OPTIONS_FILE, if it exists.
 read_config() {
+  reset_config_state
   if [[ ! -f $OPTIONS_FILE ]]; then return 0; fi
   local line rest in_options=false
   while IFS= read -r line || [[ -n $line ]]; do
@@ -160,12 +185,12 @@ extract_number() {
   fi
 }
 
-# monitors_json — [{name,description,width,height,focused}] from hyprctl.
-# Parsed with bash regexes: the plugin's dependency ceiling has no jq.
-monitors_json() {
+# parse_monitors — one monitor per line, tab separated:
+# name, description, width, height, focused.
+parse_monitors() {
   local json compact
   json="$(hyprctl monitors -j 2>/dev/null || true)"
-  if [[ -z $json || $json != *\[* || $json != *\]* ]]; then printf '[]'; return 0; fi
+  if [[ -z $json || $json != *\[* || $json != *\]* ]]; then return 0; fi
 
   # hyprctl pretty-prints this and nests objects that carry their own "name"
   # (activeWorkspace, specialWorkspace), so flatten to a single line first and
@@ -175,7 +200,7 @@ monitors_json() {
   compact="${compact#*[}"
   compact="${compact%]*}"
 
-  local pieces="" first=true object name description width height focused
+  local object name description width height focused
   while IFS= read -r object; do
     name="$(extract_string "$object" name)"
     if [[ -z $name ]]; then continue; fi
@@ -184,30 +209,211 @@ monitors_json() {
     height="$(extract_number "$object" height)"
     focused=false
     if [[ $object =~ \"focused\"[[:space:]]*:[[:space:]]*true ]]; then focused=true; fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$description" "${width:-0}" "${height:-0}" "$focused"
+  done < <(printf '%s\n' "$compact" | sed 's/}, *{/}\n{/g')
+}
+
+monitors_json() {
+  local pieces="" first=true name description width height focused
+  while IFS=$'\t' read -r name description width height focused; do
     if [[ $first == false ]]; then pieces+=","; fi
     pieces+="{\"name\":\"$(json_escape "$name")\",\"description\":\"$(json_escape "$description")\",\"width\":${width:-0},\"height\":${height:-0},\"focused\":$(json_bool "$focused")}"
     first=false
-  done < <(printf '%s\n' "$compact" | sed 's/}, *{/}\n{/g')
-
+  done < <(parse_monitors)
   printf '[%s]' "$pieces"
 }
 
-# addresses_json — non-loopback IPv4 addresses from `ip -4 -o addr show`.
-addresses_json() {
-  local line family address candidate pieces="" first=true
+monitor_names() {
+  local name rest
+  while IFS=$'\t' read -r name rest; do printf '%s\n' "$name"; done < <(parse_monitors)
+}
+
+# assigned_addresses — every IPv4 address of this machine, one per line.
+assigned_addresses() {
+  local line family address
   while IFS= read -r line; do
     if read -r _ _ family address _ <<< "$line"; then
       if [[ $family == inet && -n ${address:-} ]]; then
-        candidate="${address%%/*}"
-        if [[ $candidate != 127.* && -n $candidate ]]; then
-          if [[ $first == false ]]; then pieces+=","; fi
-          pieces+="\"$(json_escape "$candidate")\""
-          first=false
-        fi
+        printf '%s\n' "${address%%/*}"
       fi
     fi
   done < <(ip -4 -o addr show 2>/dev/null || true)
+}
+
+addresses_json() {
+  local address pieces="" first=true
+  while IFS= read -r address; do
+    if [[ -z $address || $address == 127.* ]]; then continue; fi
+    if [[ $first == false ]]; then pieces+=","; fi
+    pieces+="\"$(json_escape "$address")\""
+    first=false
+  done < <(assigned_addresses)
   printf '[%s]' "$pieces"
+}
+
+# --- validation --------------------------------------------------------------
+
+is_assigned_address() {
+  local candidate="$1" address
+  while IFS= read -r address; do
+    if [[ $address == "$candidate" ]]; then return 0; fi
+  done < <(assigned_addresses)
+  return 1
+}
+
+validate_host() {
+  local value="$1"
+  if [[ -z $value ]]; then error_json "host must not be empty"; fi
+  if [[ $value == 127.0.0.1 || $value == 0.0.0.0 ]]; then return 0; fi
+  if is_assigned_address "$value"; then return 0; fi
+  # A dotted quad that is not on this machine is not a bindable address; a
+  # plain hostname is accepted and resolved by hypr-rdp at start time.
+  if [[ $value =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error_json "host $value is not an address of this machine"
+  fi
+  if [[ $value =~ ^[A-Za-z0-9.-]{1,64}$ ]]; then return 0; fi
+  error_json "invalid host: $value"
+}
+
+validate_port() {
+  local value="$1"
+  if [[ ! $value =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+    error_json "port must be 1-65535, got: $value"
+  fi
+}
+
+validate_username() {
+  local value="$1"
+  if [[ ! $value =~ ^[A-Za-z0-9._-]{1,32}$ ]]; then
+    error_json "username must be 1-32 characters of A-Z a-z 0-9 . _ -"
+  fi
+}
+
+validate_output() {
+  local value="$1" name
+  if [[ $value == virtual ]]; then return 0; fi
+  while IFS= read -r name; do
+    if [[ $name == "$value" ]]; then return 0; fi
+  done < <(monitor_names)
+  error_json "unknown display: $value"
+}
+
+# --- writing the options file ------------------------------------------------
+
+# filter_key <KEY> <value> — replace the KEY="..." line, or append one at the
+# end. Extra occurrences of the key are dropped, so the result has exactly one.
+filter_key() {
+  local key="$1" value="$2" wrote=false line
+  if [[ -f $OPTIONS_FILE ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+      if [[ $line =~ ^[[:space:]]*$key= ]]; then
+        if [[ $wrote == false ]]; then
+          printf '%s="%s"\n' "$key" "$value"
+          wrote=true
+        fi
+        continue
+      fi
+      printf '%s\n' "$line"
+    done < "$OPTIONS_FILE"
+  fi
+  if [[ $wrote == false ]]; then printf '%s="%s"\n' "$key" "$value"; fi
+}
+
+# strip_output_tokens <text> — the same option text minus `--output` pairs.
+strip_output_tokens() {
+  local text="$1"
+  set -f
+  local -a tokens=($text)
+  set +f
+  local out="" i=0 token
+  while (( i < ${#tokens[@]} )); do
+    token="${tokens[i]}"
+    if [[ $token == --output ]]; then
+      i=$((i + 1))
+      if (( i < ${#tokens[@]} )) && [[ ${tokens[i]} != --* ]]; then i=$((i + 1)); fi
+      continue
+    fi
+    if [[ $token == --output=* ]]; then i=$((i + 1)); continue; fi
+    out+="$token "
+    i=$((i + 1))
+  done
+  printf '%s' "${out% }"
+}
+
+# filter_output <value> — set `--output <value>` inside the OPTIONS block; an
+# empty value removes the flag (virtual display).
+filter_output() {
+  local value="$1" in_options=false saw_block=false wrote=false
+  local line rest inner
+  if [[ -f $OPTIONS_FILE ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+      if [[ $in_options == false ]]; then
+        if [[ $line == OPTIONS=\(* ]]; then
+          saw_block=true
+          rest="${line#OPTIONS=(}"
+          if [[ $rest == *')'* ]]; then
+            inner="$(strip_output_tokens "${rest%%)}")"
+            if [[ -n $value ]]; then
+              if [[ -n $inner ]]; then inner="$inner --output $value"; else inner="--output $value"; fi
+            fi
+            printf 'OPTIONS=(%s)\n' "$inner"
+            wrote=true
+          else
+            printf '%s\n' "$line"
+            in_options=true
+          fi
+          continue
+        fi
+        printf '%s\n' "$line"
+        continue
+      fi
+      if [[ $line == ')' || $line == ')'* ]]; then
+        if [[ $wrote == false && -n $value ]]; then
+          printf '  --output %s\n' "$value"
+          wrote=true
+        fi
+        in_options=false
+        printf '%s\n' "$line"
+        continue
+      fi
+      if [[ $line =~ ^[[:space:]]*--output[[:space:]]*$ || $line =~ ^[[:space:]]*--output([[:space:]]|=) ]]; then
+        if [[ -n $value ]]; then
+          printf '  --output %s\n' "$value"
+          wrote=true
+        fi
+        continue
+      fi
+      printf '%s\n' "$line"
+    done < "$OPTIONS_FILE"
+  fi
+  if [[ $saw_block == false && -n $value ]]; then
+    printf 'OPTIONS=(\n  --output %s\n)\n' "$value"
+  fi
+}
+
+# rewrite_options <filter> [value] — stream the current file through a filter
+# into a fresh temp file and swap it in, keeping one backup.
+rewrite_options() {
+  local filter="$1" value="${2:-}"
+  mkdir -p "$CONF_DIR"
+  local tmp
+  tmp="$(mktemp "$CONF_DIR/.options.XXXXXX")"
+  TMP_FILE="$tmp"
+
+  case "$filter" in
+    bind|username) filter_key "${filter^^}" "$value" > "$tmp" ;;
+    output) filter_output "$value" > "$tmp" ;;
+    output-remove) filter_output "" > "$tmp" ;;
+    *) error_json "internal: unknown filter $filter" ;;
+  esac
+
+  if [[ -f $OPTIONS_FILE ]]; then
+    cp -f "$OPTIONS_FILE" "$BACKUP_FILE"
+    chmod 600 "$BACKUP_FILE"
+  fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$OPTIONS_FILE"
+  TMP_FILE=""
 }
 
 # --- commands ----------------------------------------------------------------
@@ -260,6 +466,85 @@ cmd_get() {
     "$(addresses_json)"
 }
 
+set_bind() {
+  local mode="" host="" port=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --mode) if (( $# < 2 )); then error_json "--mode needs a value"; fi; mode="$2"; shift 2 ;;
+      --host) if (( $# < 2 )); then error_json "--host needs a value"; fi; host="$2"; shift 2 ;;
+      --port) if (( $# < 2 )); then error_json "--port needs a value"; fi; port="$2"; shift 2 ;;
+      *) error_json "unknown option for set bind: $1" ;;
+    esac
+  done
+
+  case "$mode" in
+    localhost) host="127.0.0.1" ;;
+    lan) host="0.0.0.0" ;;
+    custom)
+      if [[ -z $host ]]; then error_json "--mode custom needs --host"; fi
+      ;;
+    "") error_json "set bind needs --mode localhost|lan|custom" ;;
+    *) error_json "unknown bind mode: $mode" ;;
+  esac
+
+  validate_host "$host"
+
+  # Switching mode keeps the port the user already listens on unless --port is
+  # given, so a LAN change does not silently move off a chosen port.
+  read_config
+  local current_port=0
+  if [[ $bind == *:* ]]; then
+    current_port="${bind##*:}"
+    if [[ ! $current_port =~ ^[0-9]+$ ]]; then current_port=0; fi
+  fi
+  if (( current_port < 1 || current_port > 65535 )); then current_port="$DEFAULT_PORT"; fi
+  if [[ -z $port ]]; then port="$current_port"; fi
+  validate_port "$port"
+
+  rewrite_options bind "$host:$port"
+}
+
+set_username() {
+  local value=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --value) if (( $# < 2 )); then error_json "--value needs a value"; fi; value="$2"; shift 2 ;;
+      *) error_json "unknown option for set username: $1" ;;
+    esac
+  done
+  validate_username "$value"
+  rewrite_options username "$value"
+}
+
+set_output() {
+  local value=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --value) if (( $# < 2 )); then error_json "--value needs a value"; fi; value="$2"; shift 2 ;;
+      *) error_json "unknown option for set output: $1" ;;
+    esac
+  done
+  validate_output "$value"
+  if [[ $value == virtual ]]; then
+    rewrite_options output-remove
+  else
+    rewrite_options output "$value"
+  fi
+}
+
+cmd_set() {
+  local field="${1:-}"
+  shift || true
+  case "$field" in
+    bind) set_bind "$@" ;;
+    username) set_username "$@" ;;
+    output) set_output "$@" ;;
+    "") error_json "set needs a field: bind|username|output" ;;
+    *) error_json "unknown set field: $field" ;;
+  esac
+  cmd_get
+}
+
 # --- entry point -------------------------------------------------------------
 
 command="${1:-}"
@@ -267,6 +552,7 @@ shift || true
 
 case "$command" in
   get) cmd_get ;;
+  set) cmd_set "$@" ;;
   "") usage; exit 1 ;;
   *) usage; printf '{"error":"unknown command: %s"}\n' "$(json_escape "$command")"; exit 1 ;;
 esac
