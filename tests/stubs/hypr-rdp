@@ -1,3 +1,15 @@
 #!/usr/bin/env bash
-printf '%s\n' "([masked])" >> "$STUB_LOG"
-exit 127
+# hypr-rdp stub: `--version` prints $STUB_STATE/hypr-rdp.version (absent -> exit
+# 1, the shape of a machine without the package); any other argv prints
+# $STUB_STATE/hypr-rdp.out and exits with $STUB_STATE/hypr-rdp.exit.
+printf '%s\n' "${0##*/} $*" >> "$STUB_LOG"
+if [[ ${1:-} == --version ]]; then
+  if [[ -f $STUB_STATE/hypr-rdp.version ]]; then
+    cat "$STUB_STATE/hypr-rdp.version"
+    exit 0
+  fi
+  exit 1
+fi
+if [[ -f $STUB_STATE/hypr-rdp.out ]]; then cat "$STUB_STATE/hypr-rdp.out"; fi
+if [[ -f $STUB_STATE/hypr-rdp.exit ]]; then exit "$(cat "$STUB_STATE/hypr-rdp.exit")"; fi
+exit 0

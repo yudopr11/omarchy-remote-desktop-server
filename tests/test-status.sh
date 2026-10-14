@@ -114,3 +114,12 @@ t_status_password_presence() {
   out="$("$SCRIPTS/omarchy-rdp-status")" || fail "status exited non-zero"
   assert_contains "$out" '"storedPassword":true'
 }
+
+t_status_installed_with_version() {
+  setup_env
+  printf 'hypr-rdp 0.1.6\n' > "$STUB_STATE/hypr-rdp.version"
+  local out
+  out="$("$SCRIPTS/omarchy-rdp-status")" || fail "status exited non-zero"
+  assert_contains "$out" '"installed":true'
+  assert_contains "$out" '"version":"hypr-rdp 0.1.6"'
+}

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# omarchy-rdp-stop — stop the server and disarm it.
+#
+# `stop` always ends the session: the runtime password is deleted, so nothing
+# re-arms until a password is set again. The stored copy (if any) still re-arms
+# the unit at the next login — that is what "autostart" in the JSON reports.
+# `--forget` also deletes the stored copy and disables the unit, so the machine
+# stops serving RDP altogether.
+
+set -euo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
+RUN_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-rdp"
+UNIT="hypr-rdp.service"
+
+error_json() {
+  printf '{"error":"%s"}\n' "${1//\"/\\\"}"
+  exit 1
+}
+
+forget=false
+while (( $# > 0 )); do
+  case "$1" in
+    --forget) forget=true; shift ;;
+    *) error_json "unknown option: $1" ;;
+  esac
+done
+
+systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
+rm -f "$RUN_DIR/password"
+
+if [[ $forget == true ]]; then
+  rm -f "$CONF_DIR/password"
+  systemctl --user disable "$UNIT" >/dev/null 2>&1 || true
+fi
+
+autostart=false
+enabled_state="$(systemctl --user is-enabled "$UNIT" 2>/dev/null || true)"
+if [[ $enabled_state == enabled ]]; then autostart=true; fi
+
+printf '{"stopped":true,"armed":false,"autostart":%s}\n' "$autostart"

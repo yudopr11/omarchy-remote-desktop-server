@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# omarchy-rdp-server — ExecStart for hypr-rdp.service.
+#
+# Reads the user's options file, picks the password (runtime first, stored
+# second) and execs hypr-rdp. Every precondition failure is one line on stderr
+# with exit 2, because the journal is the only place a user sees why the unit
+# died.
+
+set -euo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-rdp"
+RUN_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr-rdp"
+
+fail() {
+  printf 'hypr-rdp: %s\n' "$1" >&2
+  exit 2
+}
+
+for file in "$CONF_DIR/tls.crt" "$CONF_DIR/tls.key"; do
+  [[ -r $file ]] || fail "$file is missing; set the password again from the panel"
+done
+
+# A session password in the runtime directory wins; otherwise fall back to the
+# stored one so the service can arm itself at login.
+PASSWORD_FILE=""
+for file in "$RUN_DIR/password" "$CONF_DIR/password"; do
+  if [[ -s $file ]]; then
+    PASSWORD_FILE="$file"
+    break
+  fi
+done
+[[ -n $PASSWORD_FILE ]] || fail "no password found; set one from the panel"
+
+BIND="127.0.0.1:3389"
+USERNAME=""
+OPTIONS=()
+if [[ -r $CONF_DIR/options ]]; then
+  # shellcheck source=/dev/null
+  source "$CONF_DIR/options"
+fi
+if [[ -z ${USERNAME:-} ]]; then USERNAME="$(id -un)"; fi
+[[ -n ${WAYLAND_DISPLAY:-} ]] || fail "WAYLAND_DISPLAY is unset; start it from the Omarchy graphical session"
+
+# The password travels as a file path, never as a value: argv is readable by
+# every process of this user.
+exec hypr-rdp \
+  --bind "$BIND" \
+  --cert "$CONF_DIR/tls.crt" \
+  --key "$CONF_DIR/tls.key" \
+  --username "$USERNAME" \
+  --password-file "$PASSWORD_FILE" \
+  "${OPTIONS[@]}"

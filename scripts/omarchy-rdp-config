@@ -428,6 +428,17 @@ filter_option() {
 # into a fresh temp file and swap it in, keeping one backup. Filters:
 #   rewrite_options bind|username <value>
 #   rewrite_options option <flag> [value]
+
+# lock_options — serialise writers. A write reads the whole file, edits one key
+# and puts it back, so the read-to-write window has to be exclusive: without
+# this, two `set` calls in flight at once lose one of the two changes (the
+# temp-file swap keeps the file itself whole, but not the update).
+lock_options() {
+  mkdir -p "$CONF_DIR"
+  exec 9>"$CONF_DIR/options.lock"
+  flock 9 || error_json "could not lock $CONF_DIR/options"
+}
+
 rewrite_options() {
   local filter="$1"
   shift || true
@@ -524,6 +535,8 @@ set_bind() {
 
   validate_host "$host"
 
+  lock_options
+
   # Switching mode keeps the port the user already listens on unless --port is
   # given, so a LAN change does not silently move off a chosen port.
   read_config
@@ -548,6 +561,7 @@ set_username() {
     esac
   done
   validate_username "$value"
+  lock_options
   rewrite_options username "$value"
 }
 
@@ -560,6 +574,7 @@ set_output() {
     esac
   done
   validate_output "$value"
+  lock_options
   if [[ $value == virtual ]]; then
     rewrite_options option --output ""
   else
@@ -604,6 +619,8 @@ set_opt() {
     error_json "set opt needs at least one of --fps|--bitrate|--h264-backend|--capture-mode"
   fi
 
+  lock_options
+
   if [[ -n $fps ]]; then rewrite_options option --fps "$fps"; fi
   if [[ -n $bitrate ]]; then rewrite_options option --bitrate "$bitrate"; fi
   if [[ -n $backend ]]; then rewrite_options option --h264-backend "$backend"; fi
@@ -636,6 +653,7 @@ set_autostart() {
         error_json "no runtime password; set one in the terminal first"
       fi
       mkdir -p "$CONF_DIR"
+      lock_options
       install -m 0600 "$runtime_password" "$PASSWORD_FILE"
       systemctl --user enable "$UNIT" >/dev/null 2>&1 || error_json "could not enable $UNIT"
       ;;
