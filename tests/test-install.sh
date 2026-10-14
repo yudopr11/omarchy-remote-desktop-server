@@ -157,3 +157,49 @@ t_install_no_password_in_log() {
   assert_eq "$PASSWORD" "$(cat "$XDG_RUNTIME_DIR/hypr-rdp/password")"
   assert_not_contains "$(cat "$STUB_LOG")" "$PASSWORD"
 }
+
+# The engine package is the one thing install.sh cannot copy into place: it comes
+# from the AUR through omarchy-pkg-add. Absence is expressed the same way status
+# does it, by the run probe failing.
+t_install_installs_missing_package() {
+  case_setup
+  stub_password_helper
+  install_run --skip-password >/dev/null || fail "install.sh exited non-zero"
+  assert_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add hypr-rdp"
+}
+
+t_install_skips_package_when_present() {
+  case_setup
+  stub_password_helper
+  printf 'hypr-rdp 0.1.6\n' > "$STUB_STATE/hypr-rdp.version"
+  install_run --skip-password >/dev/null || fail "install.sh exited non-zero"
+  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-pkg-add"
+}
+
+t_install_stops_when_package_install_fails() {
+  case_setup
+  stub_password_helper
+  printf '1\n' > "$STUB_STATE/omarchy-pkg-add.exit"
+  if install_run --skip-password >/dev/null 2>&1; then
+    fail "install.sh should fail when the package cannot be installed"
+  fi
+  assert_file_absent "$BIN_DIR/omarchy-rdp-server"
+  assert_file_absent "$UNIT_FILE"
+}
+
+# A machine that is already armed keeps its password: the panel's Install button
+# is then only about the missing pieces, so no second prompt.
+t_install_skips_password_when_armed() {
+  case_setup
+  mkdir -p "$TEST_TMP/bin" "$XDG_RUNTIME_DIR/hypr-rdp"
+  cat > "$TEST_TMP/bin/omarchy-rdp-password" <<'EOF'
+#!/usr/bin/env bash
+printf 'omarchy-rdp-password %s\n' "$*" >> "$STUB_LOG"
+exit 9
+EOF
+  chmod 755 "$TEST_TMP/bin/omarchy-rdp-password"
+  printf 'existingpassword\n' > "$XDG_RUNTIME_DIR/hypr-rdp/password"
+  install_run >/dev/null || fail "install.sh exited non-zero"
+  assert_not_contains "$(cat "$STUB_LOG")" "omarchy-rdp-password"
+  assert_eq "existingpassword" "$(cat "$XDG_RUNTIME_DIR/hypr-rdp/password")"
+}

@@ -103,6 +103,16 @@ for helper in "${HELPERS[@]}"; do
 done
 check_target "$UNIT_DIR/$UNIT_NAME" "$SCRIPT_DIR/systemd/$UNIT_NAME"
 
+# The engine itself comes from the AUR. Install it before anything is written, so
+# a package step that fails leaves the machine as it was. The probe is the same
+# run probe `omarchy-rdp-status` uses, so a test stub can stand in for absence.
+if ! hypr-rdp --version >/dev/null 2>&1; then
+  if ! omarchy-pkg-add hypr-rdp; then
+    printf 'install.sh: hypr-rdp is missing and omarchy-pkg-add failed\n' >&2
+    exit 1
+  fi
+fi
+
 # --bind rewrites the host of an existing options file and keeps its port; the
 # panel's `set bind` is the precise tool, this flag is the first-run shortcut.
 update_bind() {
@@ -167,9 +177,15 @@ systemctl --user enable --now "$UNIT_NAME"
 
 # The helper is looked up on PATH first, so the same script that was just
 # installed normally handles this (and a test or an alternative install can
-# substitute it); only then fall back to the copy we placed.
+# substitute it); only then fall back to the copy we placed. A machine that is
+# already armed is not asked again — the panel's Install action is then purely
+# "add what is missing".
 password_ok=false
-if [[ $skip_password == false ]]; then
+armed=false
+if [[ -s $XDG_RUNTIME_DIR/hypr-rdp/password || -s $CONF_DIR/password ]]; then
+  armed=true
+fi
+if [[ $skip_password == false && $armed == false ]]; then
   password_helper=""
   if command -v omarchy-rdp-password >/dev/null 2>&1; then
     password_helper="$(command -v omarchy-rdp-password)"

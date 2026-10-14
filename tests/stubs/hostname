@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Recording stub: prints $STUB_STATE/<name>.out when present, exits 0.
+# Recording stub: prints $STUB_STATE/<name>.out when present, and exits with the
+# code in $STUB_STATE/<name>.exit when present (0 otherwise), so a case can make
+# a package manager or a journalctl call fail on demand.
 name="${0##*/}"
 printf '%s\n' "$name $*" >> "$STUB_LOG"
 if [[ -f "$STUB_STATE/$name.out" ]]; then cat "$STUB_STATE/$name.out"; fi
+if [[ -f "$STUB_STATE/$name.exit" ]]; then exit "$(cat "$STUB_STATE/$name.exit")"; fi
 exit 0
