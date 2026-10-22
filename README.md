@@ -29,6 +29,8 @@ the TLS certificate.
 
 ## The panel
 
+![Remote Desktop panel](docs/ui.png)
+
 | Section | What it does |
 | --- | --- |
 | Header | State chip: **Connected-ready**, **Password required**, **Stopped**, **Setup required**, **Status unavailable**. |
